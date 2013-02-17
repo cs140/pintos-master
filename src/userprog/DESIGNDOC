@@ -1,0 +1,397 @@
+Roger Hau rhau@stanford.edu
+Evan Plotkin eplotkin@stanford.edu
+Hung Tran htran1@stanford.edu
+
+Argument Passing
+
+Data Structures
+A1: 
+We did not add any structs or globals for the purpose of argument passing.
+However, I would like to mention the use of an array in our
+argument setup code.  We decided to keep track of each argument's
+position on the stack in an array within our code.  This allowed us to
+easily write the argv array to memory, as it was an exact copy of the
+array we kept as we wrote the arguments to the stack.  We simply had to
+memcpy this array.
+
+Algorithms
+A2: We implemented argument passing by modifying load() in process.c. Our
+primary objectives were to a) parse the command line into the filename 
+and arguments b) load those arguments onto the stack. In load(), we 
+extract the filename from the command line, and then we pass the 
+remainder of the command line to the helper method setup_stack().
+After setup_stack has successfully retreived a page for the stack, we
+call into another method setup_arguments, which tokenizes the remainder
+of command line. 
+The tokenization works in a loop over each of the arguments. In each
+iteration, the loop 1) places the argument on the stack 2) saves a 
+pointer to the argument in an array (the first and last slots of this
+array are saved for the filename and NULL pointer respectively). 
+After all of the arguments have been parsed out, written to the stack,
+and added to the array, we write the filename to the stack, storing
+its location in the first slot of the array.  We also write NULL to
+last location of the array.  Next, we add padding.  Next, we write
+the array itself to the stack.  Storing the location of all the arguments
+in the array allows us to do this easily, while ensuring that the argv
+array is setup correctly.  After writing the array, we write the address
+of the first element of the array (argv), then we write the number of
+arguments to the stack, and finally we write 0 as a junk address to
+the stack. (As we write to the stack we always decrement esp appropriately
+to make space)
+To ensure we do not overflow the stack page, we verify that the length
+of the input command line is no longer than 128 bytes. If it is longer,
+we report an error.
+
+Rationale:
+A3: Since Pintos uses strtok_r to handle argument passing, it's 
+important that strtok_r is able to start multiple processes concurrently.
+This makes strtok a less attractive option. Because strtok only takes
+2 arguments, it can only tokenize one string at a time. Since strtok_r
+takes 3 arguments, it's possible that multiple instances of strtok_r
+are able to run in parallel. 
+To see why this is, one only needs to look at the usage of strtok.
+If strtok is called with a non-null char* str, then it begins a new
+tokenization. Strtok then stores its 'place' in the string internally.
+Because it's internally storing its place, it is not thread safe. 
+Strtok_r is passed this place via the save_ptr, which allows multiple
+threads to call into simultaneously.
+
+A4: 
+1) The first advantage is maintainability. If a developer wants to add 
+more features to passing arguments to kernel, or make commands more 
+sophisticated, then the shell can be extended, and break down the more
+sophisticated commands into simpler system calls for the kernel. In this
+way, the complexity is pushed into the shell, not the kernel. 
+Consider the Pintos case, where the kernel handles commands--as the
+commands grow more and more complex, the kernel code will grow bulkier
+and bulkier. It could become difficult to differentiate between the 
+critical process execution code and the hairy, tangled argument parsing
+code.
+2) The second advantage is safety. The key purpose of the kernel is to
+provide applications with a clean interface to the hardware. By adding too
+much command-parsing capability into the kernel, the line between key, 
+OS functionality and application functionality is blurred. So if shell
+code was executing in the kernel instead of as an application, what would
+happen when a particular command crashed the shell? It would be far more 
+difficult to recover from a crash within the kernel (which could corrupt
+memory or disk), than a crashed process, which the kernel knows how to 
+deal with.
+ 
+B1:
+Process.h
+__________
+
+struct file_handle
+{
+	struct file* f;
+	int fd;
+	struct list_elem elem;
+};
+Each process struct contains a list of file_handle structs
+that represent files that process has open.  The file
+handle contains the "fd" that corresponds with the open file, which
+is pointed to by "f."
+
+struct lock filesys_lock;
+Lock used to synchronized our filesys operations.
+
+Thread.h
+__________
+
+struct thread
+{
+  /* 
+   * Lock and condition variable used in conjunction with
+   * sys_exec, process_create, and process_start.  Used so
+   * that sys_exec can wait until process_start successfully
+   * or unsuccessfully loads.  Success value recorded in
+   * init_success.  We considered adding these fields to
+   * our process struct, but we needed these locks to be available
+   * before process_execute calls thread_create (before we got a
+   * process and process id).
+   */
+//ADDED
+#ifdef USERPROG
+	init process_init_success;
+	struct lock proceess_init_lock;
+	struct cond process_init_cond;
+#endif
+}
+
+Process.h
+__________
+
+struct process 
+{
+  tid_t tid;	//Process's pid ... always corresponds with the
+				//tid of the thread it runs in.
+				
+  struct process** children;	//Array of all this process's
+								//children.
+  int num_children;		//Number of children in "children" array.
+
+  int waiting_thread; //Contains the tid/pid of the process that
+					  //this process is waiting on (-1 if not waiting)
+  int waiting_status; //Contains the exit status of the child this process
+					  //was waiting on.  Set by the child before exiting
+					  //if and only if this process was waiting on it.
+
+  bool exited;	//True if this process has exited, false otherwise.
+  int exit_status;	//Holds the exit status if this process has exited.
+
+  struct process* parent;	//Pointer to the parent of this process
+
+  /* 
+   * Lock and condition variable used in conjunction with
+   * process_wait and sys_exec for synchronization.
+   */
+  struct lock wait_lock;
+  struct condition wait_cond;
+
+  /*
+   * Pointer to an open file of the code this process is
+   * executing.  Kept open while the process is running
+   * to deny writes ... closed upon process exit.
+   */
+  struct file* execFile;
+
+  struct list_elem elem;	//List elem used to create a list of procceses
+
+  int process_fd;	//Counter used to give out unique file descriptors
+  struct list file_list;	//List containing a file_handle struct for
+	
+};
+
+B2:
+File descriptors are associated with open files through the file_handle struct
+described above.  Every time a file is opened, a file descriptor that is 
+unique to the process is generated.  The file_handle struct stores this file 
+descriptor along with a pointer to the now open file.
+
+These file_handles are stored in a list within the process struct that 
+allocated them.  This means that each process has its own list of file_handles 
+and, therefore its own list of file descriptors (ex. Two processes can have fd 2 
+that refers to a different file and file_handle).
+
+B3:
+The primary challenge we faced with reading and writing user data was 
+validating that all pointers passed to our system calls referred to valid user 
+memory. To solve this problem, we created a method called "check_valid_uaddr."  
+This method took in a pointer to user virtual memory (supposedly) and a size 
+and checked that the pointer pointed to a block of "size" memory of valid user 
+addresses.  To do this, we ensured that uaddr is not NULL.  We also checked 
+thatpagedir_get_page returns a valid address for each address in the block of 
+memory pointed to.  We loop over each page of the memory block and check an 
+address in the page.  We also check the first and last addresses of the block
+ to ensure we did not miss any pages. 
+
+After we had validated the data that was pointed to, we simply accessed it
+by dereferencing the pointers to it normally.  
+
+B4:
+The least number of necessary calls to pagedir_get_page for a block of 4096 
+bytes is 1.  If the block fully occupies one page, it will have no bytes on 
+another page, so only one page must be checked.  The greatest number of 
+necessary calls to pagedir_get_page for a block of 4096 bytes is 2.  This 
+occurs when the 4096 bytes span two pages.  It is impossibly for a block of
+4096 bytes to span more than 2 pages.
+
+Similarly, the least number of necessary calls to pagedir_get_page for a 
+block of 2 bytes is 1.  If both bytes are within on e page, only that page 
+must be checked. The greatest number of necessary calls to pagedir_get_page 
+for  block of 2 bytes is 2.  This occurs when the first byte of the block 
+is the last byte of a page and the last byte of the block is the first 
+byte of the next page.
+
+We could improve these numbers by allocating blocks such that they do not 
+cross boundaries unless necessary.  For example, if we would normally allocate
+a block of 4096 across page boundaries, we could instead allocate a whole new 
+page for it.  This would make the greatest and least number of necessary 
+calls for any block (block_size-1)/4096 + 1.
+
+B5:
+The "wait" system call heavily leverages our process_wait functionality.  In
+fact, all our "wait" system call does it return the value of process_wait.
+
+Our processs_wait function works very closely with our cleanup_process
+function (called from sys_exit and on page faults).  
+
+Process_wait first locks the current thread's wait_lock so it can safely
+update variables used for communication with the child.  
+
+Process_wait next checks for the case where the child does not exist or the
+current thread is not the parent of the child (if process_wait has already
+been called on this child, it "does not exist," as we remove it from our
+process tracking data structure).  In these cases, it frees the lock it
+holds and returns an error.
+
+Now, it checks to see if the child has already exited.  It will know this
+because, when a process exits, it sets a variable "exited" to true and
+stores its exit status.  If the child has exited, it will simply return the
+status and remove the child process (since it cannot be waited on again
+and has exited).
+
+If the child has not already exited, process_wait sets its own
+"waiting_thread" variable to the tid of the process it is waiting on.
+Then, it will wait for the child to exit, releasing the lock it holds.
+Then, when the child exits that matches this tid, it will set the parent's
+waiting_status variable to the correct status and signal the waiting
+parent to wake up.  Then, the parent can return the correct exit status
+and remove the child.
+
+Note #1: The child acquires the parent's lock when it attempts to edit
+the parent's variables.
+
+Note #2: We require both "waiting_status" and "exit_status" variables in
+our process struct because, when a child exits before its parent, it
+cannot set the parent's waiting_status (because the parent might be waiting
+on another thread) so it sets its own "exit_status" variable.  When a parent
+waits before the child exits, we store the exit status in the
+parent's "waiting_status" so we can free the child's process struct without
+worrying about losing access to status.
+
+B6:
+In order to avoid the code "morass", we created a helper 
+function check_valid_uaddr that would provide the 
+functionality of validating user provided addresses.
+We create a helper function called "check_valid_uaddr" to check 
+if a range of virtual address is valid or not.
+There are a couple of ways we try to mitigate the amount of 
+error handling code. 
+The first is to check the esp pointer in the intr_frame struct
+that we are passed. In this way, the individual system calls
+are less cluttered by this.
+At this point, we do not necessarily know what kind of 
+arguments each of the system calls is passed. This makes it 
+difficult for the syscall handler to check the data before it
+is passed into the invidual calls. As a result, the individual calls
+must now make a check to verify their call-specific data. However,
+we already have the check_valid_uaddr method, but we've also added
+check_string which validates strings in order to further simplify
+the error handling and untangle the code.
+
+B7:
+I had to ensure that "exec" would wait for the new executable to load before
+it returned.  To do this, I added process_init_lock and process_init_cond
+to the thread struct (#ifdef USERPROG only).  I used these to synchronize
+sys_exec and process_start.  Before calling process_execute, sys_exec
+acquires its own process_init_lock.  After calling load, start_process also
+tries to acquire this lock (the lock of the parent thread).  So,
+start_process will then wait for sys_exec to release the lock, which it does
+with a call to cond_wait on process_init_cond.  Start process then stores
+the success status in process_init_status, signals process_init_cond,
+and releases the lock.  Then, when sys_exec wakes up, it can read the
+status of the initialization and take action according to whether
+it failed or not.
+
+B8:
+Both process_wait and cleanup_process (called from sys_exit and in response to
+page faults) make use of a shared wait_lock (stored in the parent) to ensure
+synchronization.  
+
+If the parent calls process_wait before the child, it will
+set its waiting_thread field to the child_tid that it is waiting on, then it
+will wait on its wait_cond and wait_lock.  Then, when the child calls
+sys_exit (or page faults) it will acquire the same wait_lock (possibly
+waiting for the process_wait call to block with cond_wait) and note that
+its parent is waiting on it (by checking parent->waiting_thread).  Then,
+it will set parent->waiting_status to the proper status and signal the
+parent to wake up.  The parent can then retrieve the exit status by checking
+parent->waiting_status.  The child process struct and its memory can then
+be freed (through remove_process), since no further calls to wait
+can examine its exit status.
+
+If the child exits before the process calls process_wait, it will
+set its own "exited" variable to true and store its exit status in its
+"exit_status" variable.  This is all done while holding wait_lock.  The
+child process struct will NOT be freed, as it needs to remain accessible
+to a parent that wishes to call process_wait and retrieve its exit status.
+Then, when P calls process wait, it will acquire the same wait_lock (possibly
+waiting for the exit call to release the lock).  It will then note that
+the child's "exited" variable is true, and it will check the child's
+"exit_status" variable.  Then, the parent will call remove_process
+to free the child process struct and its memory, since no further call
+to wait needs to be able to retrieve its exit status.
+
+We ensure that remove_process is eventually called on every process by
+keeping track of each remaining process's exit status.  Any exited
+process's struct will remain as long as its parent is live and has not
+yet waited on it.  We maintain this invariant by calling a function
+called "null_children" whenever a process exits.  This function
+sets the "parent" field of all live processes to NULL, so they know
+that their parent has exited and will not call wait on them.  It also
+calls remove_process to remove any children who have already exited
+(they were kept around in case the parent needed to wait on them).
+We considered calling null_children within remove_process (to
+recur down the parent/child "tree") but realized that this was not
+necessary.  The children that are removed in null_children
+are already "exited," so any of their children that are "exited"
+should already have been cleaned up.  The other piece that maintains
+this variant is the remove_process call at the end of any process_wait
+call.  Since the parent has already waited on the child, there is
+no need to keep its exit status hanging around.  Processes that exit
+will also call remove_process is their parent has already exited.
+
+This process ensures that remove_process is eventually called on
+every process, as eventually all processes will have exited (so
+all exited processes will have an exited parent).
+
+If Parent exits before child without waiting, it will call
+null_children, setting the child's parent pointer to NULL.
+Then, while the child exits, it will know that its parent has
+already exited and can call remove_process.
+
+If the parent exits after the child without waiting, it will call
+null_children, noting that the child has exited already and calling
+remove_process to remove it.
+
+I do not believe that there are any special cases that our code
+does not handle.
+
+
+B9: In order to protect the kernel from invalid pointers passed in from the user,
+we needed to verify that object referenced by the pointer completely resides
+in the user's address space. To verify the validity of the entire object,
+though, we need to know both the beginning and end of the object. As a 
+result, we require our users to pass in an argument that indicates the supposed
+bounds of the object. 
+There were some useful helper methods, specifically is_user_vaddr, which
+allowed us to determine whether or not an address was within a user's address
+space. Armed with that knowledge, we then try to get every page that makes up
+the object using pagedir_get_page. This gives us a two-step validation process:
+validate that the bounds of the object, and then validate that all of the pages
+that are supposed to make up the object indeed exist. If either condition is
+not fulfilled, we return a NULL to indicate that the object referenced by the
+pointer is invalid.
+
+B10:
+For file descriptor, we create a struct "file_handle" that stores 
+a mapping 1-1 between a file descriptor and a "struct file." 
+In each struct process, we keep a list of file_handles and a 
+counter "process_fd" to ensure that new file descriptor is
+unique for that particular process. Everytime, we open a new file 
+successfully, we assign its file descriptor to be the counter 
+and increment the counter by 1. The counter is initialized to 2 
+because fd 0 and 1 are reserved for standard input and output.
+
+Advantage: since we keep a list of file_handles inside each 
+process, it's easy to retrieve the struct file corresponding
+to the file_descriptor by iterating through the list.
+Different processes cannot access,= or modify the file_handle
+list from another process, which limits the chance of processes' incorrect 
+behaviors. Each process has an independent set of file descriptors 
+(including parent and child processes). Since the mapping fd to struct 
+file is 1-1, different file descriptors for a single files are opened 
+and closed independently.
+
+Disadvantage:
+To get a struct file associated with a particular fd, a 
+process has to search for it in a list in linear time, not
+constant time.
+
+B11:
+No we didn't change the mapping. The tid_t and pid_t mapping is 
+still the identity mapping in our design. Because the number of 
+processes and number of threads is 1:1, we reasoned that it would
+not be necessary to create a more sophisticated mapping than this.
+
