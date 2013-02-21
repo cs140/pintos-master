@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "vm/frame.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -111,7 +112,7 @@ thread_init (void)
   lock_init (&root_process.wait_lock);
   cond_init (&root_process.wait_cond);
   lock_init (&root_lock);
-
+  
   list_push_back(&process_list, &root_process.elem);
 }
 

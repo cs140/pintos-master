@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "synch.h"
+#include "lib/kernel/hash.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -97,6 +98,8 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    // bool supp_init;
+    struct hash supplementary_page_table; /* supplementary page table*/
     bool success;                       /* Detect user thread's success */
     struct lock process_init_lock;          //process_init_lock         
     struct condition process_init_cond;  //process_init_cond
