@@ -152,13 +152,48 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
+  // struct page* fault_page = supplementary_page_table_lookup
+  //                                       (thread_current()->spt, fault_addr);
+  bool valid_address = true;
+  /* No data at the virtual address */
+  // if (fault_page == NULL) {
+  //   valid_address = false;
+  // } else {
+  //    Invalid if within kernel address, write to read online page 
+  //   if ((!is_valid_uaddr(fault_page->vaddr) && user) || (!not_present)) {
+  //       valid_address = false;
+  //   }
+  // }
+  
+  valid_address = false;
+  if (!valid_address) {
+    printf ("Page fault at %p: %s error %s page in %s context.\n",
+            fault_addr,
+            not_present ? "not present" : "rights violation",
+            write ? "writing" : "reading",
+            user ? "user" : "kernel");
 
-  cleanup_process(-1, f);
-  kill (f);
+    cleanup_process(-1, f);
+    kill (f);
+  } 
+  // else {
+  //   /* Locate the data */
+  //   if (fault_page->mmentry != NULL) {
+  //     /* Read from disk */
+  //     // mmap_in(fault_page->mmentry, fault_addr);
+  //     return;
+  //   } 
+
+  //   if (fault_page->sslot != NULL) {
+  //     /* Read from swap slot */
+  //     // swap_in(fault_page->sslot, fault_addr);
+  //     return;
+  //   }
+
+  //   if (fault_page->zeroed) {
+  //     /* TODO something */
+  //     return;
+  //   }
+  // }
 }
 

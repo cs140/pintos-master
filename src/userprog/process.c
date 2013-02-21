@@ -6,9 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <list.h>
-#include "userprog/gdt.h"
-#include "userprog/pagedir.h"
-#include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -19,6 +16,11 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/tss.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
 
 static thread_func start_process NO_RETURN;
@@ -40,7 +42,8 @@ process_execute (const char *cmdline)
 
   /* Make a copy of cmdline.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
+  // fn_copy = palloc_get_page (0);
+  fn_copy = frame_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, cmdline, PGSIZE);
@@ -57,7 +60,8 @@ process_execute (const char *cmdline)
 
   if (tid == TID_ERROR) 
   {
-    palloc_free_page (fn_copy); 
+    // palloc_free_page (fn_copy); 
+    frame_free_page(fn_copy);
     thread_current()->success = false;  
   }
 
@@ -86,13 +90,17 @@ start_process (void *cmdline_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  struct thread* t = thread_current();
+  supplementary_page_table_init(&t->supplementary_page_table);
   success = load (cmdline, &if_.eip, &if_.esp);
+
 
   /* If load failed, quit. */
   struct process* parent = get_parent(get_process(thread_current()->tid));
   struct thread* parent_thread = thread_get(parent->tid);
   lock_acquire(&(parent_thread->process_init_lock));
-  palloc_free_page (cmdline);
+  // palloc_free_page (cmdline);
+  frame_free_page(cmdline);
 
   if(parent_thread->success) parent_thread->success = success;
 
@@ -420,6 +428,7 @@ load (const char *cmdline, void (**eip) (void), void **esp)
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
+  
   process_activate ();
 
   /* Parse cmdline into executable and arguments */
@@ -605,6 +614,7 @@ static bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
 {
+  // printf("in load segment\n");
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
@@ -619,14 +629,16 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      // uint8_t *kpage = palloc_get_page (PAL_USER);
+      uint8_t *kpage = frame_get_page (PAL_USER);
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          // palloc_free_page (kpage);
+          frame_free_page(kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -635,6 +647,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       if (!install_page (upage, kpage, writable)) 
         {
           palloc_free_page (kpage);
+          frame_free_page(kpage);
           return false; 
         }
 
@@ -706,7 +719,8 @@ setup_stack (void **esp, char* filename, char* save_ptr)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  // kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = frame_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
@@ -716,7 +730,8 @@ setup_stack (void **esp, char* filename, char* save_ptr)
         setup_arguments(esp, filename, save_ptr);
       }
       else
-        palloc_free_page (kpage);
+        // palloc_free_page (kpage);
+        frame_free_page(kpage);
     }
   return success;
 }
@@ -780,7 +795,7 @@ void free_filehandles()
   {
     struct list_elem* e = list_pop_front(&p->file_list);
     struct file_handle* fh = list_entry(e, struct file_handle, elem);
-    list_remove(e);
+    //list_remove(e);
     file_close(fh->f);
     free(fh);
   }
