@@ -2,6 +2,7 @@
 #define FRAME_H
 #include <debug.h>
 #include "lib/kernel/hash.h"
+#include "filesys/filesys.h"
 
 
 struct page
@@ -10,7 +11,11 @@ struct page
 	void *vaddr; //virtual address
 	struct mmap_entry* mmentry; //null if not mmapped
 	struct swap_slot* sslot; //null if not in swap table 
-	bool zeroed; //zero page	
+	bool executable; 
+	int page_read_bytes; //zero page if read_bytes==0
+	uint8_t* kpage;	
+	off_t ofs;
+	bool writable;
 	struct hash_elem helem;
 };
 

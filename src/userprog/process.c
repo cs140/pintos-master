@@ -42,8 +42,8 @@ process_execute (const char *cmdline)
 
   /* Make a copy of cmdline.
      Otherwise there's a race between the caller and load(). */
-  // fn_copy = palloc_get_page (0);
-  fn_copy = frame_get_page (0);
+  fn_copy = palloc_get_page (0);
+  // fn_copy = frame_get_page (0, NULL);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, cmdline, PGSIZE);
@@ -60,8 +60,8 @@ process_execute (const char *cmdline)
 
   if (tid == TID_ERROR) 
   {
-    // palloc_free_page (fn_copy); 
-    frame_free_page(fn_copy);
+    palloc_free_page (fn_copy); 
+    // frame_free_page(0, fn_copy, NULL);
     thread_current()->success = false;  
   }
 
@@ -99,8 +99,8 @@ start_process (void *cmdline_)
   struct process* parent = get_parent(get_process(thread_current()->tid));
   struct thread* parent_thread = thread_get(parent->tid);
   lock_acquire(&(parent_thread->process_init_lock));
-  // palloc_free_page (cmdline);
-  frame_free_page(cmdline);
+  palloc_free_page (cmdline);
+  // frame_free_page(PAL_USER, cmdline);
 
   if(parent_thread->success) parent_thread->success = success;
 
@@ -622,34 +622,50 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
+      
       /* Calculate how to fill this page.
          We will read PAGE_READ_BYTES bytes from FILE
          and zero the final PAGE_ZERO_BYTES bytes. */
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-      /* Get a page of memory. */
+      // printf("page_read_bytes:%d\n", page_read_bytes);
+      /* Get a page of memory. */ 
       // uint8_t *kpage = palloc_get_page (PAL_USER);
-      uint8_t *kpage = frame_get_page (PAL_USER);
+      uint8_t *kpage = frame_get_page (PAL_USER, upage);
+      // printf("kpage:%p\n", kpage);
+      // printf("upage:%p\n", upage);
       if (kpage == NULL)
         return false;
 
+      struct thread* t = thread_current();
+      struct hash* spt = &t->supplementary_page_table;
+      // printf("\nWW\n");
+      struct page* spt_entry = supplementary_page_table_lookup(spt, upage);
+      spt_entry->executable = true;
+      spt_entry->page_read_bytes = page_read_bytes;
+      spt_entry->kpage = kpage;
+      spt_entry->writable = writable;
+      spt_entry->ofs = file_tell(file);
+      file_seek(file,file_tell(file) + page_read_bytes);
+      // printf("\nXX\n");
       /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          // palloc_free_page (kpage);
-          frame_free_page(kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
+            // printf("DIFF: %d %d\n",spt_entry->ofs,file_tell(file));
+      // file_read (file, kpage, page_read_bytes);
+      // if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      //   {
+      //     // palloc_free_page (kpage);
+      //     frame_free_page(kpage);
+      //    return false; 
+      //  }
+      // memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
       /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          frame_free_page(kpage);
-          return false; 
-        }
+      // if (!install_page (upage, kpage, writable)) 
+      //  {
+      //    palloc_free_page (kpage);
+      //    frame_free_page(kpage);
+      //    return false; 
+      //  }
 
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -720,10 +736,13 @@ setup_stack (void **esp, char* filename, char* save_ptr)
   bool success = false;
 
   // kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  kpage = frame_get_page (PAL_USER | PAL_ZERO);
+  uint8_t* uaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  // printf("before get page\n");
+  kpage = frame_get_page (PAL_USER | PAL_ZERO, (void*)uaddr);
+  // printf("after get page\n");
   if (kpage != NULL) 
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      success = install_page (uaddr, kpage, true);
       if (success)
       {
         *esp = PHYS_BASE;
@@ -755,6 +774,40 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+
+void lazy_load_segment(struct page* fault_page)
+{
+    install_page(fault_page->vaddr,fault_page->kpage,fault_page->writable);
+  struct process* process = get_process(thread_current()->tid);
+   file_seek (process->execFile, fault_page->ofs);
+  int page_read_bytes = fault_page->page_read_bytes;
+  if(page_read_bytes > 0)
+  {
+    // printf("LAZY: %p %d\n",fault_page->kpage,file_tell(process->execFile));
+    // printf("S: %s\n",fault_page->kpage);
+    file_read(process->execFile,fault_page->kpage,page_read_bytes);
+  }
+  memset(fault_page->kpage + page_read_bytes,0,PGSIZE - page_read_bytes);
+  // printf("E: %s\n",fault_page->kpage);
+
+  // printf("\nABC\n");
+}
+
+// if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      //   {
+      //     // palloc_free_page (kpage);
+      //     frame_free_page(kpage);
+      //    return false; 
+      //  }
+      // memset (kpage + page_read_bytes, 0, page_zero_bytes);
+
+      /* Add the page to the process's address space. */
+      // if (!install_page (upage, kpage, writable)) 
+      //  {
+      //    palloc_free_page (kpage);
+      //    frame_free_page(kpage);
+      //    return false; 
+      //  }
 
 struct file_handle*
 find_file_handle (int fd) 

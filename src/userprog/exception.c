@@ -1,10 +1,15 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include "filesys/file.h"
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "vm/frame.h"
+#include "vm/page.h"
+
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -152,20 +157,25 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  // struct page* fault_page = supplementary_page_table_lookup
-  //                                       (thread_current()->spt, fault_addr);
-  bool valid_address = true;
-  /* No data at the virtual address */
-  // if (fault_page == NULL) {
-  //   valid_address = false;
-  // } else {
-  //    Invalid if within kernel address, write to read online page 
-  //   if ((!is_valid_uaddr(fault_page->vaddr) && user) || (!not_present)) {
-  //       valid_address = false;
-  //   }
-  // }
-  
-  valid_address = false;
+  struct hash* spt = &thread_current()->supplementary_page_table;
+  // printf("fault_addr:%p\n", fault_addr);
+  struct page* fault_page = supplementary_page_table_lookup
+                                         (spt,
+                                          fault_addr);
+  bool valid_address = false;
+  if(fault_page != NULL && fault_page->executable) valid_address = true;
+  // /* No data at the virtual address */
+  //  if (fault_page == NULL) {
+  //    valid_address = false;
+  //  } else { 
+  //    if ((!is_user_vaddr(fault_page->vaddr) && user) || (!not_present)) {
+  //        valid_address = false;
+  //    }
+  //     // printf("\nC\n");
+  //    if(fault_page->executable) valid_address = true;
+  //  }
+  //  // printf("\nD\n");
+    // valid_address = false;
   if (!valid_address) {
     printf ("Page fault at %p: %s error %s page in %s context.\n",
             fault_addr,
@@ -176,6 +186,17 @@ page_fault (struct intr_frame *f)
     cleanup_process(-1, f);
     kill (f);
   } 
+  else 
+  {
+    if(fault_page->executable)
+    {
+       // printf("\nB\n");
+      lazy_load_segment(fault_page);
+    }
+
+
+  }
+
   // else {
   //   /* Locate the data */
   //   if (fault_page->mmentry != NULL) {
