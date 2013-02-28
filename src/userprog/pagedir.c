@@ -99,6 +99,7 @@ lookup_page (uint32_t *pd, const void *vaddr, bool create)
 bool
 pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 {
+  printf("setting page:%p %d\n", upage,pd);
   uint32_t *pte;
 
   ASSERT (pg_ofs (upage) == 0);
@@ -144,6 +145,7 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
 void
 pagedir_clear_page (uint32_t *pd, void *upage) 
 {
+  printf("clearing page:%p %d\n", upage,pd);
   uint32_t *pte;
 
   ASSERT (pg_ofs (upage) == 0);

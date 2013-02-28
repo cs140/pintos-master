@@ -48,7 +48,7 @@ supplementary_page_table_put(struct hash* spt, void *vaddr)
 	// 	return NULL;
 	// }
 
-	// lock_acquire(&thread_current()->spt_lock);
+	lock_acquire(&thread_current()->spt_lock);
 	struct page* p = malloc(sizeof(struct page));	
 	if (p == NULL) PANIC("NO MALLOC SPACE\n");
 	p->pd = thread_current()->pagedir;
@@ -61,7 +61,7 @@ supplementary_page_table_put(struct hash* spt, void *vaddr)
 
 	struct hash_elem* helem = hash_insert(spt, &(p->helem));
 
-	// lock_release(&thread_current()->spt_lock);
+	lock_release(&thread_current()->spt_lock);
 
 	if(helem == NULL) return p;
 	else return hash_entry(helem, struct page, helem);
@@ -70,7 +70,7 @@ supplementary_page_table_put(struct hash* spt, void *vaddr)
 struct page*
 supplementary_page_table_lookup(struct hash* spt, void* vaddr)
 {
-	// lock_acquire(&thread_current()->spt_lock);
+	lock_acquire(&thread_current()->spt_lock);
 	//allign user address to page boundaries
 	void* page = (void*)ROUND_DOWN((uint64_t)vaddr, (uint64_t)PAGE_SIZE);
 	// void* page = (void*)(((int)vaddr/PAGE_SIZE) * PAGE_SIZE);
@@ -83,7 +83,7 @@ supplementary_page_table_lookup(struct hash* spt, void* vaddr)
 
 	struct page* lookup_page = e != NULL ? hash_entry (e, struct page, helem) : NULL;
 
-	// lock_release(&thread_current()->spt_lock);
+	lock_release(&thread_current()->spt_lock);
 
 	return lookup_page;
 }
@@ -91,7 +91,7 @@ supplementary_page_table_lookup(struct hash* spt, void* vaddr)
 struct page*
 supplementary_page_table_remove(struct hash* spt, void *vaddr)
 {
-	// lock_acquire(&thread_current()->spt_lock);
+	lock_acquire(&thread_current()->spt_lock);
 	struct page p;
 	struct hash_elem *e;
 
@@ -100,6 +100,6 @@ supplementary_page_table_remove(struct hash* spt, void *vaddr)
 
 	struct page* removed = e != NULL ? hash_entry (e, struct page, helem) : NULL;
 
-	// lock_release(&thread_current()->spt_lock);
+	lock_release(&thread_current()->spt_lock);
 	return removed;
 }

@@ -112,11 +112,45 @@ frame_table_remove(void *paddr)
 	return removed; 
 }
 
+void get_lock()
+{
+	lock_acquire(&frame_lock);
+}
+
+void release_lock()
+{
+	lock_release(&frame_lock);
+}
+
+void*
+uframe_get_page(enum palloc_flags flags, void *uaddr) 
+{
+	ASSERT ((flags & PAL_USER) != 0);
+	// lock_acquire(&frame_lock);
+
+	void* page = palloc_get_page(flags);
+
+	if (page == NULL)
+	{
+		struct frame* evict = frame_get_evict();
+		page = swap_get_frame(evict);
+	}
+
+	struct hash* spt = &thread_current()->supplementary_page_table;
+	struct page* supp_page = supplementary_page_table_put(spt, uaddr);
+	
+	struct frame* frame = frame_table_put(page, uaddr);
+	frame->supplementary_page = supp_page;
+	// lock_release(&frame_lock);
+	return page;
+}
+
 void*
 frame_get_page(enum palloc_flags flags, void *uaddr) 
 {
 	ASSERT ((flags & PAL_USER) != 0);
 	lock_acquire(&frame_lock);
+
 	void* page = palloc_get_page(flags);
 
 	if (page == NULL)

@@ -246,6 +246,7 @@ page_fault (struct intr_frame *f)
 void
 supplementary_page_load(struct page* fault_page)
 {
+  printf("supp load finished:%p %d\n", fault_page->vaddr,fault_page->pd);
   // if (fault_page->evicted) printf("EVICTED\n");
   // else if (fault_page->executable) printf("EXECUTABLE\n");
   // else if (fault_page->mmentry != NULL) printf("MMAPPED\n");

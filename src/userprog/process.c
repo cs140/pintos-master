@@ -787,7 +787,7 @@ install_page (void *upage, void *kpage, bool writable)
 void 
 lazy_load_segment(struct page* fault_page, struct file* file)
 {
-  install_page(fault_page->vaddr,fault_page->kpage,fault_page->writable);
+  install_other_page(fault_page->vaddr,fault_page->kpage,fault_page->writable,fault_page->pd);
   // struct process* process = get_process(thread_current()->tid);
    file_seek (file, fault_page->ofs);
   int page_read_bytes = fault_page->page_read_bytes;

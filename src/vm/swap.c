@@ -9,7 +9,7 @@
 #include "devices/block.h"
 #include "threads/malloc.h"
 #include "userprog/exception.h"
-#include "userprog/pagedir.h"
+#include "userprog/pagedir.h"	
 #include "userprog/process.h"
 #include "vm/swap.h"
 #include "vm/page.h"
@@ -52,7 +52,7 @@ swap_get_frame(struct frame* evict)
 	// printf("swap get frame\n");
 	void* page;
 
-	// lock_acquire(&swap_table.lock);
+	lock_acquire(&swap_table.lock);
 
 	if(evict == NULL) 
 		PANIC("swap_get_frame: no evictable frame");
@@ -80,7 +80,7 @@ swap_get_frame(struct frame* evict)
 		}
 	free(f);
 	// printf("frame_table_remove\n");
-	// lock_release(&swap_table.lock);
+	lock_release(&swap_table.lock);
 	return page;
 }
 
@@ -122,8 +122,12 @@ write_to_swap(struct frame* frame)
 	void* base = frame->uaddr;
 
 	if(pagedir_get_page(frame->supplementary_page->pd,frame->uaddr) == NULL)
-		supplementary_page_load(frame->supplementary_page);
-
+		{
+			supplementary_page_load(frame->supplementary_page);
+						printf("ABOUT TO WRITE\n");
+		}
+		
+		printf("writing %p %d %d\n",frame->uaddr,frame->supplementary_page->pd,thread_current()->pagedir);
 	int i;
 	for(i = 0; i < PGSIZE/BLOCK_SECTOR_SIZE; i++)
 	{
@@ -133,6 +137,8 @@ write_to_swap(struct frame* frame)
 		block_write(swap_block,sector,data);
 	}
 
+	printf("HERE\n");
+
 	// lock_release(&swap_table.lock);
 
 	return true;
@@ -141,10 +147,11 @@ write_to_swap(struct frame* frame)
 void
 read_from_swap(struct page* fault_page)
 {
-	void* new_page = frame_get_page(PAL_USER, fault_page->vaddr);
+	get_lock();
+	void* new_page = uframe_get_page(PAL_USER, fault_page->vaddr);
 	// printf("new_page:%p %p\n", new_page,fault_page->vaddr);
 	// PANIC("kpage:%p\n", fault_page->kpage);
-	// lock_acquire(&swap_table.lock);
+	lock_acquire(&swap_table.lock);
 
     size_t swap_slot = fault_page->swap_slot;
     // printf("swap_read: %d\n",swap_slot);
@@ -174,5 +181,6 @@ read_from_swap(struct page* fault_page)
     fault_page->evicted = false;
     // f->locked = false;
     // if(swap_slot != 133)PANIC("kpage:%p %d\n", fault_page->kpage,printf("done\n"));
-    // lock_release(&swap_table.lock);
+    lock_release(&swap_table.lock);
+    release_lock();
 }

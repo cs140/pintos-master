@@ -23,9 +23,12 @@ struct frame* frame_table_put(void *paddr, void *uaddr);
 struct frame* frame_table_lookup(void* uaddr);
 struct frame* frame_table_remove(void *uaddr);
 void* frame_get_page(enum palloc_flags, void *uaddr);
+void* uframe_get_page(enum palloc_flags, void *uaddr);
 void frame_free_page(void *page);
 struct frame* frame_get_evict(void);
 void frame_cleanup(void);
+void get_lock();
+void release_lock();
 
 
 #endif /* vm.frame.h */
