@@ -1,6 +1,9 @@
+#include "lib/round.h"
 #include "page.h"
+#include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
+#include "userprog/process.h"
 
 #define PAGE_SIZE 4096
 
@@ -27,43 +30,76 @@ page_less(const struct hash_elem *a, const struct hash_elem *b,
 bool 
 supplementary_page_table_init(struct hash* spt) 
 {
-	
+	lock_init(&thread_current()->spt_lock);
 	return hash_init(spt, page_hash, page_less, NULL);
 }
 
 /*
  * Assumes that the user addresses are page alligned
 */
-struct hash_elem*
+struct page*
 supplementary_page_table_put(struct hash* spt, void *vaddr)
 {
+	// printf("table size:%d\n", hash_size(spt));
 	ASSERT ((int)vaddr % PAGE_SIZE == 0);
-	struct page* p = malloc(sizeof(struct page));	
-	p->vaddr = vaddr;
+	// if (supplementary_page_table_lookup(spt, vaddr) != NULL)
+	// {
+	// 	// printf("SUCK\n");
+	// 	return NULL;
+	// }
 
-	return hash_insert(spt, &(p->helem));
+	// lock_acquire(&thread_current()->spt_lock);
+	struct page* p = malloc(sizeof(struct page));	
+	if (p == NULL) PANIC("NO MALLOC SPACE\n");
+	p->pd = thread_current()->pagedir;
+	p->vaddr = vaddr;
+	p->evicted = false;
+	p->writable = true;
+	p->mmentry = NULL;
+	p->executable = false;
+	p->process = process_current();
+
+	struct hash_elem* helem = hash_insert(spt, &(p->helem));
+
+	// lock_release(&thread_current()->spt_lock);
+
+	if(helem == NULL) return p;
+	else return hash_entry(helem, struct page, helem);
 }
 
 struct page*
 supplementary_page_table_lookup(struct hash* spt, void* vaddr)
 {
+	// lock_acquire(&thread_current()->spt_lock);
 	//allign user address to page boundaries
-	void* page = (void*)(((int)vaddr/PAGE_SIZE) * PAGE_SIZE);
+	void* page = (void*)ROUND_DOWN((uint64_t)vaddr, (uint64_t)PAGE_SIZE);
+	// void* page = (void*)(((int)vaddr/PAGE_SIZE) * PAGE_SIZE);
+	// printf("vaddr:%p roudned page:%p\n", vaddr, page);
 	struct page p;
 	struct hash_elem *e;
 
 	p.vaddr = page;
 	e = hash_find(spt, &p.helem);
-	return e != NULL ? hash_entry (e, struct page, helem) : NULL;
+
+	struct page* lookup_page = e != NULL ? hash_entry (e, struct page, helem) : NULL;
+
+	// lock_release(&thread_current()->spt_lock);
+
+	return lookup_page;
 }
 
 struct page*
 supplementary_page_table_remove(struct hash* spt, void *vaddr)
 {
+	// lock_acquire(&thread_current()->spt_lock);
 	struct page p;
 	struct hash_elem *e;
 
 	p.vaddr = vaddr;
 	e = hash_delete(spt, &p.helem);
-	return e != NULL ? hash_entry (e, struct page, helem) : NULL;
+
+	struct page* removed = e != NULL ? hash_entry (e, struct page, helem) : NULL;
+
+	// lock_release(&thread_current()->spt_lock);
+	return removed;
 }

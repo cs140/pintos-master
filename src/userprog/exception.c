@@ -5,11 +5,15 @@
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "threads/interrupt.h"
+#include "threads/loader.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/frame.h"
-#include "vm/page.h"
+#include "vm/swap.h"
 
+
+#define PUSH_DIST 4
+#define PUSHA_DIST 32
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -158,12 +162,38 @@ page_fault (struct intr_frame *f)
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
   struct hash* spt = &thread_current()->supplementary_page_table;
-  // printf("fault_addr:%p\n", fault_addr);
+  //printf("fault_addr:%p\n", fault_addr);
   struct page* fault_page = supplementary_page_table_lookup
                                          (spt,
                                           fault_addr);
+  // printf("fault_addr:%p %u\n", fault_addr, fault_addr);
+  // printf("f->esp:%p %u\n", f->esp, f->esp);      
+
+  struct process* proc = get_process(thread_current()->tid);
+  void* process_bottom = (void*)(PHYS_BASE - proc->num_stack_pages * PGSIZE);                                      
+  
+  if(fault_addr < process_bottom)
+  {
+    if ((int)fault_addr == (int)f->esp - PUSH_DIST 
+    || (int)fault_addr == (int)f->esp - PUSHA_DIST
+    || (fault_addr > f->esp))
+    {
+      // printf("GROW STACK\n");
+      // printf("PHYS_BASE:%u\n", PHYS_BASE);
+      // printf("PROC_BOTTOM:%u\n", process_bottom);
+      // printf("ESP:%u\n", f->esp);
+      // printf("fault_addr:%u\n", fault_addr);
+      // if (fault_page->evicted) printf("PAGE EVICTED\n");
+      grow_stack(fault_addr, f);
+      return;
+    }
+  }
+
   bool valid_address = false;
-  if(fault_page != NULL && fault_page->executable) valid_address = true;
+  if(fault_page != NULL && 
+    (fault_page->executable || fault_page->mmentry != NULL || fault_page->evicted) &&
+    !(write && !fault_page->writable)) 
+    valid_address = true;
   // /* No data at the virtual address */
   //  if (fault_page == NULL) {
   //    valid_address = false;
@@ -188,13 +218,8 @@ page_fault (struct intr_frame *f)
   } 
   else 
   {
-    if(fault_page->executable)
-    {
-       // printf("\nB\n");
-      lazy_load_segment(fault_page);
-    }
-
-
+      // printf("In page fault\n");
+    supplementary_page_load(fault_page);
   }
 
   // else {
@@ -216,5 +241,34 @@ page_fault (struct intr_frame *f)
   //     return;
   //   }
   // }
+}
+
+void
+supplementary_page_load(struct page* fault_page)
+{
+  // if (fault_page->evicted) printf("EVICTED\n");
+  // else if (fault_page->executable) printf("EXECUTABLE\n");
+  // else if (fault_page->mmentry != NULL) printf("MMAPPED\n");
+  // else printf("NONE\n");
+  if (fault_page->evicted)
+  {
+    // printf("EVICTED\n");
+    read_from_swap(fault_page);
+  }
+  else if(fault_page->executable)
+  {
+    // printf("B\n");
+     //printf("start lazy load exec\n");
+    struct process* process = fault_page->process;
+    lazy_load_segment(fault_page, process->execFile);
+  } 
+  else if (fault_page->mmentry != NULL) 
+  {
+        // printf("C\n");
+    //struct file* fi = file_reopen(fault_page->mmentry->backup_file);
+    //fault_page->mmentry->file = fi;
+    lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
+    //file_close(fi);
+  }
 }
 

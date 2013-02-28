@@ -11,7 +11,6 @@
 #include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/init.h"
-#include "threads/interrupt.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -19,9 +18,6 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
-#include "vm/frame.h"
-#include "vm/page.h"
-
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -92,11 +88,17 @@ start_process (void *cmdline_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   struct thread* t = thread_current();
   supplementary_page_table_init(&t->supplementary_page_table);
+  //init the mmap table
+  mmap_table_init(&t->mmap_page_table);
+  
+  struct process* cur_process = get_process(thread_current()->tid);
+  cur_process->mapid = 0;
+  
   success = load (cmdline, &if_.eip, &if_.esp);
 
 
   /* If load failed, quit. */
-  struct process* parent = get_parent(get_process(thread_current()->tid));
+  struct process* parent = get_parent(cur_process);
   struct thread* parent_thread = thread_get(parent->tid);
   lock_acquire(&(parent_thread->process_init_lock));
   palloc_free_page (cmdline);
@@ -114,7 +116,7 @@ start_process (void *cmdline_)
     remove_process(parent->tid,thread_current()->tid);
     thread_exit ();
   }
-
+// PANIC("STARTED\n");
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -141,6 +143,12 @@ get_process (tid_t tid)
   }
 
   return NULL;
+}
+
+struct process*
+process_current()
+{
+  return get_process(thread_current()->tid);
 }
 
 /* Recursive function to find process given thread id */
@@ -193,6 +201,7 @@ add_process (tid_t parent_tid, tid_t child_tid)
   child->exited = false;
   child->parent = parent;
   child->children = NULL;
+  child->num_stack_pages = 1;
   lock_init (&child->wait_lock);
   cond_init (&child->wait_cond);
   list_init (&child->file_list);
@@ -549,8 +558,6 @@ load (const char *cmdline, void (**eip) (void), void **esp)
 
 /* load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
-
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
 static bool
@@ -628,12 +635,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
          and zero the final PAGE_ZERO_BYTES bytes. */
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-      // printf("page_read_bytes:%d\n", page_read_bytes);
       /* Get a page of memory. */ 
       // uint8_t *kpage = palloc_get_page (PAL_USER);
       uint8_t *kpage = frame_get_page (PAL_USER, upage);
-      // printf("kpage:%p\n", kpage);
-      // printf("upage:%p\n", upage);
       if (kpage == NULL)
         return false;
 
@@ -646,8 +650,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       spt_entry->kpage = kpage;
       spt_entry->writable = writable;
       spt_entry->ofs = file_tell(file);
+      spt_entry->mmentry = NULL;
       file_seek(file,file_tell(file) + page_read_bytes);
-      // printf("\nXX\n");
       /* Load this page. */
             // printf("DIFF: %d %d\n",spt_entry->ofs,file_tell(file));
       // file_read (file, kpage, page_read_bytes);
@@ -745,6 +749,11 @@ setup_stack (void **esp, char* filename, char* save_ptr)
       success = install_page (uaddr, kpage, true);
       if (success)
       {
+        struct hash* spt = &thread_current()->supplementary_page_table;
+        struct page* supp_page = supplementary_page_table_lookup(spt, uaddr);
+        // printf("first page:%p", uaddr);
+        supp_page->writable = true;
+
         *esp = PHYS_BASE;
         setup_arguments(esp, filename, save_ptr);
       }
@@ -764,7 +773,7 @@ setup_stack (void **esp, char* filename, char* save_ptr)
    with palloc_get_page().
    Returns true on success, false if UPAGE is already mapped or
    if memory allocation fails. */
-static bool
+bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();
@@ -775,17 +784,18 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
-void lazy_load_segment(struct page* fault_page)
+void 
+lazy_load_segment(struct page* fault_page, struct file* file)
 {
-    install_page(fault_page->vaddr,fault_page->kpage,fault_page->writable);
-  struct process* process = get_process(thread_current()->tid);
-   file_seek (process->execFile, fault_page->ofs);
+  install_page(fault_page->vaddr,fault_page->kpage,fault_page->writable);
+  // struct process* process = get_process(thread_current()->tid);
+   file_seek (file, fault_page->ofs);
   int page_read_bytes = fault_page->page_read_bytes;
   if(page_read_bytes > 0)
   {
     // printf("LAZY: %p %d\n",fault_page->kpage,file_tell(process->execFile));
     // printf("S: %s\n",fault_page->kpage);
-    file_read(process->execFile,fault_page->kpage,page_read_bytes);
+    file_read(file,fault_page->kpage,page_read_bytes);
   }
   memset(fault_page->kpage + page_read_bytes,0,PGSIZE - page_read_bytes);
   // printf("E: %s\n",fault_page->kpage);
@@ -793,21 +803,27 @@ void lazy_load_segment(struct page* fault_page)
   // printf("\nABC\n");
 }
 
-// if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-      //   {
-      //     // palloc_free_page (kpage);
-      //     frame_free_page(kpage);
-      //    return false; 
-      //  }
-      // memset (kpage + page_read_bytes, 0, page_zero_bytes);
+void
+grow_stack(void* fault_addr, struct intr_frame* f)
+{
+  struct process* proc = get_process(thread_current()->tid);
+  void* process_bottom = (void*)(PHYS_BASE - proc->num_stack_pages * PGSIZE);
+  int distance = ROUND_UP((uint64_t)process_bottom - (uint64_t)fault_addr, PGSIZE);
 
-      /* Add the page to the process's address space. */
-      // if (!install_page (upage, kpage, writable)) 
-      //  {
-      //    palloc_free_page (kpage);
-      //    frame_free_page(kpage);
-      //    return false; 
-      //  }
+  int num_new_pages = distance / PGSIZE;
+
+  // printf("process_bottom:%p distance:%d\n", process_bottom, distance);
+  int i;
+  for (i=0; i<num_new_pages; i++)
+  {
+    void* new_upage = (void*)((int)process_bottom - ((i+1) * PGSIZE));
+    void* new_kpage = frame_get_page(PAL_USER, new_upage);
+    struct hash* spt = &thread_current()->supplementary_page_table;
+    // struct page* supp_page = supplementary_page_table_lookup(spt, new_upage);
+    install_page(new_upage, new_kpage, true);
+    proc->num_stack_pages++;
+  }
+}
 
 struct file_handle*
 find_file_handle (int fd) 
@@ -854,14 +870,17 @@ void free_filehandles()
   }
 }
 
+
 void cleanup_process (uint32_t status, struct intr_frame *f)
 {
   struct process* cur_process = get_process(thread_current()->tid);
   struct process* parent = get_parent(cur_process);
 
+  frame_cleanup();
   lock_acquire(&filesys_lock);
   file_close(cur_process->execFile);
   free_filehandles();
+  mmap_cleanup(f);
   lock_release(&filesys_lock);
 
   if(parent != NULL && !parent->exited) 

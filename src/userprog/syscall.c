@@ -8,11 +8,15 @@
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
 #include "threads/thread.h"
+#include "threads/palloc.h"
 #include "devices/shutdown.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "userprog/exception.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
 static void syscall_handler (struct intr_frame *);
 const void *check_valid_uaddr(const void * uaddr, int size);
@@ -26,7 +30,10 @@ static void sys_create(const char* file, unsigned initial_size,
 static void sys_wait(pid_t pid, struct intr_frame *f) ;
 static void sys_read (int fd, void *buffer, unsigned size, 
   struct intr_frame *f);
+static void sys_mmap(int fd, void *addr, struct intr_frame *f);
+static void sys_munmap(mapid_t mapid, struct intr_frame *f);
 static void sys_open (const char *file, struct intr_frame *f);
+static void sys_remove (const char *file, struct intr_frame *f);
 static void sys_filesize(int fd, struct intr_frame *f);
 static void sys_exec(const char* cmd_line, struct intr_frame *f);
 static void sys_seek(int fd, int position);
@@ -35,6 +42,7 @@ static void sys_close(int fd, struct intr_frame *f);
 static int num_args(enum SYSCALL_NUMBER number);
 static bool check_args(void* esp,int num_args);
 static bool check_string(const char* file);
+static bool overlap_mapped_file(void* upage, int length);
 
 const void*
 check_valid_uaddr(const void * uaddr, int size) 
@@ -44,6 +52,7 @@ check_valid_uaddr(const void * uaddr, int size)
     return NULL;
   }
 
+  struct hash* spt = &thread_current()->supplementary_page_table;
   const void *usaddr = uaddr; //user start addr 
 	void *ueaddr = (void*)((char*)uaddr + size - 1); //user end addr
 
@@ -53,26 +62,67 @@ check_valid_uaddr(const void * uaddr, int size)
 	//TODO NEED TO VALIDATE ALL PAGES IN BETWEEN
   const void* cur;
 	for (cur=usaddr; cur<ueaddr; cur+=4096) {
-	  if (!is_user_vaddr(cur))	return NULL;
+    struct page* supp_page = supplementary_page_table_lookup(spt, cur);
+	  if (!is_user_vaddr(cur) || supp_page == NULL)	return NULL;
 
     void* page = pagedir_get_page (pd, cur);
-    if (page == NULL) return NULL;
+    if (page == NULL) supplementary_page_load(supp_page);
 	}
 
-  if(!is_user_vaddr(ueaddr)) return NULL;
+  struct page* supp_page = supplementary_page_table_lookup(spt, ueaddr);
+  if(!is_user_vaddr(ueaddr) || supp_page == NULL) return NULL;
   
   void *keaddr = pagedir_get_page (pd, ueaddr);
 
-
-	//one of these is out of the bounds 
+	// one of these is out of the bounds 
 	if (keaddr==NULL) 
 	{	
-		return NULL;
+    // printf("supp_page:%p\n", ueaddr);
+		// return NULL;
+    supplementary_page_load(supp_page);
 	}
 
+  // printf("after\n", ueaddr);
 	return uaddr;
 }
 
+const bool
+check_writable(const void* uaddr, int size)
+{
+  if (uaddr == NULL)
+  {
+    return false;
+  }
+
+  const void *usaddr = uaddr; //user start addr 
+  void *ueaddr = (void*)((char*)uaddr + size - 1); //user end addr
+
+  uint32_t *pd = thread_current()->pagedir; //WHAT THREAD IS THIS?!
+  struct hash* spt = &thread_current()->supplementary_page_table;
+
+  //validate both the start and end addresses
+  //TODO NEED TO VALIDATE ALL PAGES IN BETWEEN
+  const void* cur;
+  for (cur=usaddr; cur<ueaddr; cur+=4096) {
+    struct page* pg = supplementary_page_table_lookup(spt, cur);
+    // if (pg == NULL) PANIC("PG NULL:%p\n", cur);
+    if (pg == NULL || !pg->writable) return false;;
+  }
+
+  struct page* end_pg = supplementary_page_table_lookup(spt, ueaddr);
+  // if (end_pg == NULL) PANIC("ENDPG NULL\n");
+  if(end_pg == NULL || !end_pg->writable) return false;
+  
+  // void *keaddr = pagedir_get_page (pd, ueaddr);
+
+  // //one of these is out of the bounds 
+  // if (keaddr==NULL) 
+  // { 
+  //   return false;
+  // }
+
+  return true;
+}
 
 void
 syscall_init (void) 
@@ -115,6 +165,10 @@ int num_args (enum SYSCALL_NUMBER number)
       return 3;
     case SYS_WRITE:
       return 3;
+    case SYS_MMAP:
+      return 2;
+    case SYS_MUNMAP:
+      return 1;
     case SYS_SEEK:
       return 2;
     case SYS_TELL:
@@ -148,6 +202,7 @@ syscall_handler (struct intr_frame *f UNUSED)
 {
   if (check_valid_uaddr(f->esp, sizeof(enum SYSCALL_NUMBER)) == NULL) 
   {
+    // PANIC("FUCK STACK SHIT\n");
     sys_exit(-1, f);
     return;
   }
@@ -184,7 +239,11 @@ syscall_handler (struct intr_frame *f UNUSED)
   		  break;
       }
   	case SYS_REMOVE:
-  		break;
+      {
+        char* file = (char*)get_arg(1, f->esp);
+        sys_remove(file, f);
+    		break;
+      }
   	case SYS_OPEN:
       {
         char* file = (char*)get_arg(1,f->esp);
@@ -214,6 +273,19 @@ syscall_handler (struct intr_frame *f UNUSED)
   		sys_write(fd,buffer,length,f);
   		break;
   	}
+    case SYS_MMAP:
+    {
+      int fd = get_arg(1, f->esp);
+      void *addr = (void*)get_arg(2,f->esp);
+      sys_mmap(fd, addr, f);
+      break;
+    }
+    case SYS_MUNMAP:
+    {
+      mapid_t mapid = get_arg(1, f->esp);
+      sys_munmap(mapid, f);
+      break;
+    }
   	case SYS_SEEK:
     {
   	  int fd = get_arg(1,f->esp);
@@ -368,6 +440,21 @@ sys_open (const char *file, struct intr_frame *f)
 }
 
 static void 
+sys_remove (const char *file, struct intr_frame *f)
+{
+  lock_acquire(&filesys_lock);
+  if(!check_string(file))
+  {
+    lock_release(&filesys_lock);
+    sys_exit(-1,f);
+    return;
+  }
+  bool success = filesys_remove(file);
+  f->eax = success;
+  lock_release(&filesys_lock);
+}
+
+static void 
 sys_filesize (int fd, struct intr_frame *f) 
 {
   lock_acquire(&filesys_lock);
@@ -390,12 +477,21 @@ sys_read (int fd, void *buffer, unsigned size,
         struct intr_frame *f)
 {
   lock_acquire(&filesys_lock);
-  if (check_valid_uaddr(buffer,size) == NULL)
+  if (check_valid_uaddr(buffer,size) == NULL || !check_writable(buffer, size))
   {
+    // if (check_valid_uaddr(buffer,size) == NULL) PANIC("CHECK VALID\n");
+    // printf("A\n");
     lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;
   }
+
+  // if (!check_writable(buffer, size))
+  // {
+  //   f->eax = -1;
+  //   lock_release(&filesys_lock);
+  //   return;
+  // }
 
   int sizeRead = 0;
   /* Read from console */
@@ -406,6 +502,7 @@ sys_read (int fd, void *buffer, unsigned size,
     if (fh == NULL || buffer == NULL)  {
       f->eax = -1;
       lock_release(&filesys_lock);
+          // printf("B\n");
       return;
     }
     struct file* fi = fh->f;
@@ -414,6 +511,7 @@ sys_read (int fd, void *buffer, unsigned size,
 
   f->eax = sizeRead;
   lock_release(&filesys_lock);
+      // printf("C\n");
   return;
 }
 
@@ -421,6 +519,7 @@ static void
 sys_write (int fd, const void *buffer, unsigned length, 
             struct intr_frame *f)
 {
+  // printf("sys_write\n");
 	/* Protect against race condition */
   lock_acquire(&filesys_lock);
   if (check_valid_uaddr(buffer,length) == NULL) 
@@ -457,6 +556,204 @@ sys_write (int fd, const void *buffer, unsigned length,
   f->eax = sizeWrite;
   lock_release(&filesys_lock);
   return;
+}
+
+static bool
+overlap_mapped_file(void* upage, int length)
+{
+  struct thread* t = thread_current();
+  struct hash* spt = &t->supplementary_page_table;
+  
+  int size = (length + PGSIZE - 1) / PGSIZE;
+  int i = 0;
+  for (i = 0; i < size; i++) 
+  {
+    //printf("i = %d\n", i);
+    /* Check if overlap the stack */
+    
+    /* Check if overlap mapped pages and executable map file */
+    if (supplementary_page_table_lookup(spt, upage) != NULL) 
+    {
+      //printf("remap into same place\n");
+      return true;
+    }
+
+    upage += PGSIZE;
+  }
+  return false;
+}
+
+static void
+sys_mmap(int fd, void *upage, struct intr_frame *f)
+{
+  // lock_acquire(&filesys_lock);
+  struct file_handle* fh = find_file_handle(fd);
+  if (fh == NULL) 
+  {
+    f->eax = -1;
+    //printf("here1\n");
+    return;
+  }
+
+  struct file* fi = fh->f;
+  int length = file_length(fi);
+  /* If file length is 0 return -1 */
+  if (length == 0) 
+  {
+    f->eax = -1;
+    //printf("here2\n");
+    return;
+  }
+  /* If upage is not page align */
+  if ((int)upage % PGSIZE != 0 || (int)upage == 0 || fd == 0 || fd == 1) 
+  {
+    f->eax = -1;
+    //printf("here3\n");
+    return;
+  }
+  //printf("here\n");
+  //TODO check if upageess is valid 
+  /* If the range of pages mapped overlaps any existing
+   * set of mapped pages, including the stack or pages mapped
+   * at executable load time
+   */
+   //printf("here\n");
+   if (overlap_mapped_file(upage, length)) 
+   {
+      f->eax = -1;
+      return;
+   }
+   //printf("there\n");
+   /* Increment mapid */
+
+   uint32_t read_bytes = length;
+   uint32_t zero_bytes = 0;
+   if (read_bytes % PGSIZE == 0) 
+   {
+      zero_bytes = 0;
+   } else 
+   {
+      zero_bytes = PGSIZE - (read_bytes % PGSIZE);
+   }
+
+   int org_ofs = file_tell(fi);
+   struct thread* t = thread_current();
+   struct process* p = get_process(t->tid);
+   p->mapid++;
+
+   struct hash* mpt = &t->mmap_page_table;
+   struct hash* spt = &t->supplementary_page_table;
+   /* Insert an entry into the hash table */
+   int array_size = (length + PGSIZE-1)/PGSIZE;
+   mmap_table_put(mpt, p->mapid, array_size); 
+   struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, p->mapid);
+   //if (mpt_entry == NULL) printf("NULL\n");
+   //mpt_entry->file = fi;
+   mpt_entry->size = array_size;
+   /* Keep a extra copy of the file */
+   //mpt_entry->backup_file = malloc(sizeof(struct file));
+   //memcpy(mpt_entry->backup_file, fi, sizeof(struct file));
+   mpt_entry->backup_file = file_reopen(fi);
+   int count = 0;
+
+   /* Load segment */
+   while (read_bytes > 0 || zero_bytes > 0) 
+   {
+      //printf("upage = %d\n", (int)upage);
+     //printf("Count = %d\n",count);
+     size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+     size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+     uint8_t *kpage = frame_get_page (PAL_USER, upage);
+     if (kpage == NULL)
+     {
+        f->eax = -1;
+        //printf("kpage is NULL\n");
+        return;
+     }
+     
+     struct page* spt_entry = supplementary_page_table_lookup(spt, upage);  
+     
+     spt_entry->executable = false;
+     spt_entry->writable = true;
+     spt_entry->page_read_bytes = page_read_bytes;
+     spt_entry->kpage = kpage;
+     spt_entry->vaddr = upage;
+     //printf("here5\n");
+     spt_entry->ofs = file_tell(fi);
+     spt_entry->mmentry = mpt_entry;
+     file_seek(fi,file_tell(fi) + page_read_bytes);
+     //printf("here4\n");
+     mpt_entry->pages[count] = spt_entry;
+     //printf("here7\n");
+     read_bytes -= page_read_bytes;
+     zero_bytes -= page_zero_bytes;
+
+     upage += PGSIZE;
+     count++;
+   }
+   //printf("here8 %d\n", length);
+   /* Return the mapid */
+   f->eax = p->mapid;
+   file_seek(fi,org_ofs);
+
+   // lock_release(&filesys_lock);
+}
+
+static void
+sys_munmap(mapid_t mapid, struct intr_frame *f)
+{
+  mmap_unmap(mapid, f);
+  // //printf("In munmap\n");
+  // //lock_acquire(&filesys_lock);
+  // struct thread* t = thread_current();
+  // struct hash* mpt = &t->mmap_page_table;
+  // struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, mapid);
+  // /* If the mapid doesn't exist for this process */
+  // if (mpt_entry == NULL)
+  // {
+  //   f->eax = -1;
+  //   return;
+  // }
+  
+  // struct file* fi = mpt_entry->backup_file;
+  // int i = 0;
+  
+  // int length = file_length(mpt_entry->backup_file);
+  // int cur_write = 0;
+  // uint32_t *pd = thread_current()->pagedir;
+
+  // for (i = 0; i < mpt_entry->size; i++) 
+  // {
+  //   struct page* page = mpt_entry->pages[i];
+  //   void* addr = page->vaddr;
+  //   /* Write the database back to the file */
+  //   /*if (write_byte < PGSIZE) 
+  //   {
+
+  //   } else 
+  //   {
+
+  //   }*/
+  //   if (pagedir_get_page(pd, addr) != NULL) 
+  //   {
+  //     //printf("here %d %d %s\n", page->page_read_bytes, page->ofs, addr);
+  //     //if (fi->deny_write) printf("deny write\n");
+  //     file_write_at(fi, addr, page->page_read_bytes, page->ofs);
+  //   }
+  //   //cur_write += ;
+  //   //printf("there\n");
+  //   /* Remove from frame page */
+  //   //frame_free_page(page->kpage);
+  //   pagedir_clear_page(pd, addr);
+  //   supplementary_page_table_remove(
+  //     &(thread_current()->supplementary_page_table), addr);
+  // }
+  
+
+  // free(mpt_entry->backup_file);
+  // mmap_table_remove(mpt, mapid);
+  // //lock_release(&filesys_lock);
 }
 
 static void

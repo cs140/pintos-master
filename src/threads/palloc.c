@@ -9,6 +9,7 @@
 #include <string.h>
 #include "threads/loader.h"
 #include "threads/synch.h"
+#include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/frame.h"
 
@@ -62,6 +63,7 @@ palloc_init (size_t user_page_limit)
              user_pages, "user pool");
 
   frame_table_init();
+  swap_init();
 }
 
 /* Obtains and returns a group of PAGE_CNT contiguous free pages.
@@ -113,7 +115,10 @@ palloc_get_multiple (enum palloc_flags flags, size_t page_cnt)
 void *
 palloc_get_page (enum palloc_flags flags) 
 {
-  return palloc_get_multiple (flags, 1);
+
+  void* page = palloc_get_multiple (flags, 1);
+  // printf("getting page:%p thread:%d\n", page, thread_current()->tid);
+  return page;
 }
 
 /* Frees the PAGE_CNT pages starting at PAGES. */
@@ -148,6 +153,8 @@ palloc_free_multiple (void *pages, size_t page_cnt)
 void
 palloc_free_page (void *page) 
 {
+  // if(page == 0xc0286000) PANIC("FREES\n");
+  // printf("freeing page:%p thread:%d\n", page, thread_current()->tid);
   palloc_free_multiple (page, 1);
 }
 

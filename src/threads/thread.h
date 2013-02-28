@@ -100,6 +100,9 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
     // bool supp_init;
     struct hash supplementary_page_table; /* supplementary page table*/
+    struct lock spt_lock;
+    struct hash mmap_page_table;
+    struct lock mmap_lock;
     bool success;                       /* Detect user thread's success */
     struct lock process_init_lock;          //process_init_lock         
     struct condition process_init_cond;  //process_init_cond
