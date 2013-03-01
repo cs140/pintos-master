@@ -126,7 +126,7 @@ mmap_unmap_file(mapid_t mapid, struct intr_frame* f,struct thread* t)
 }
 
 bool 
-mmap_unmap_page(struct frame* frame)
+mmap_unmap_page(struct frame* frame,bool dirty)
 {
   uint32_t *pd = frame->supplementary_page->pd;
   struct mmap_entry* mpt_entry = frame->supplementary_page->mmentry;
@@ -135,13 +135,12 @@ mmap_unmap_page(struct frame* frame)
 
   struct page* page = mpt_entry->pages[index];
 
-  if (pagedir_get_page(pd, frame->uaddr) != NULL && 
-      pagedir_is_dirty(pd, frame->uaddr) == true) 
-    {
-      lock_acquire(&filesys_lock);
-      file_write_at(fi, frame->paddr, page->page_read_bytes, page->ofs);
-      lock_release(&filesys_lock);
-    }
+  if (dirty) 
+  {
+    lock_acquire(&filesys_lock);
+    file_write_at(fi, frame->paddr, page->page_read_bytes, page->ofs);
+    lock_release(&filesys_lock);
+  }
 
   if (pagedir_get_page(pd, frame->uaddr) != NULL) pagedir_clear_page(pd, frame->uaddr);
   

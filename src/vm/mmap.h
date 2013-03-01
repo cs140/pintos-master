@@ -28,6 +28,6 @@ struct mmap_entry* mmap_table_remove(struct hash* mpt, mapid_t mapid);
 
 void mmap_cleanup(struct intr_frame* f,struct thread* t);
 void mmap_unmap_file(mapid_t mapid, struct intr_frame* f,struct thread* t);
-bool mmap_unmap_page(struct frame* frame);
+bool mmap_unmap_page(struct frame* frame,bool dirty);
 
 #endif 

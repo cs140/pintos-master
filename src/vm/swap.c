@@ -49,27 +49,24 @@ swap_get_frame(struct frame* evict)
 
 	page = evict->paddr;
 
-	if(!swap_out(evict)) 
-		PANIC("swap_get_frame: failed to swap out");
-
+	bool dirty = pagedir_is_dirty(evict->supplementary_page->pd,evict->uaddr);
 	pagedir_clear_page(evict->supplementary_page->pd,evict->uaddr);
 
-	if(evict->supplementary_page->mmentry == NULL) 
-		evict->supplementary_page->evicted = true;
+	if(!swap_out(evict,dirty)) 
+		PANIC("swap_get_frame: failed to swap out");
 
-	struct frame* f = frame_table_remove(evict->paddr);
-	free(f);
 	lock_release(&swap_table.lock);
 	return page;
 }
 
 bool 
-swap_out(struct frame* frame)
+swap_out(struct frame* frame, bool dirty)
 {
 	if (frame->supplementary_page->mmentry != NULL) 
 	{
-		return mmap_unmap_page(frame);
-	} else 
+		return mmap_unmap_page(frame,dirty);
+	} 
+	else 
 	{
 		return write_to_swap(frame);
 	}

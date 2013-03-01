@@ -13,7 +13,7 @@ struct swap_pool
 
 void swap_init (void);
 void* swap_get_frame(struct frame* evict);
-bool swap_out(struct frame* frame);
+bool swap_out(struct frame* frame,bool dirty);
 struct frame* read_from_swap(struct page* fault_page);
 
 #endif

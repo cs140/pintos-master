@@ -130,6 +130,12 @@ static struct frame* frame_get_page_core(enum palloc_flags flags,void* uaddr)
 	{
 		struct frame* evict = frame_get_evict();
 		page = swap_get_frame(evict);
+
+		if(evict->supplementary_page->mmentry == NULL) 
+			evict->supplementary_page->evicted = true;
+
+		struct frame* f = frame_table_remove(evict->paddr);
+		free(f);
 	}
 
 	struct hash* spt = &thread_current()->supplementary_page_table;
