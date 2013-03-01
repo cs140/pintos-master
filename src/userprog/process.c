@@ -39,7 +39,6 @@ process_execute (const char *cmdline)
   /* Make a copy of cmdline.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  // fn_copy = frame_get_page (0, NULL);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, cmdline, PGSIZE);
@@ -57,7 +56,6 @@ process_execute (const char *cmdline)
   if (tid == TID_ERROR) 
   {
     palloc_free_page (fn_copy); 
-    // frame_free_page(0, fn_copy, NULL);
     thread_current()->success = false;  
   }
 
@@ -91,7 +89,7 @@ start_process (void *cmdline_)
   //init the mmap table
   mmap_table_init(&t->mmap_page_table);
   
-  struct process* cur_process = get_process(thread_current()->tid);
+  struct process* cur_process = process_current();
   cur_process->mapid = 0;
   
   success = load (cmdline, &if_.eip, &if_.esp);
@@ -102,7 +100,6 @@ start_process (void *cmdline_)
   struct thread* parent_thread = thread_get(parent->tid);
   lock_acquire(&(parent_thread->process_init_lock));
   palloc_free_page (cmdline);
-  // frame_free_page(PAL_USER, cmdline);
 
   if(parent_thread->success) parent_thread->success = success;
 
@@ -116,7 +113,7 @@ start_process (void *cmdline_)
     remove_process(parent->tid,thread_current()->tid);
     thread_exit ();
   }
-// PANIC("STARTED\n");
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -176,7 +173,8 @@ get_process_recursive (tid_t tid, struct process* process)
 struct process*
 get_parent (struct process* process) 
 {
-  if (process == NULL || process->parent == NULL) {
+  if (process == NULL || process->parent == NULL) 
+  {
     return NULL;
   }
   return process->parent;
@@ -216,7 +214,8 @@ add_process (tid_t parent_tid, tid_t child_tid)
       free(child);
       return NULL;
     }
-  } else
+  } 
+  else
   {
     parent->children = realloc(parent->children, 
                                 parent->num_children*sizeof(struct process*));
@@ -241,8 +240,10 @@ remove_process (tid_t parent_tid, tid_t child_tid)
   {
     int num_children = parent->num_children;
     int i = 0;
-    for (i = 0; i < num_children; i++) {
-      if (parent->children[i]->tid == child_tid) {
+    for (i = 0; i < num_children; i++) 
+    {
+      if (parent->children[i]->tid == child_tid) 
+      {
         child = parent->children[i];
         parent->children[i] = parent->children[num_children-1];
         break;
@@ -318,18 +319,18 @@ process_exit (void)
      to the kernel-only page directory. */
   pd = cur->pagedir;
   if (pd != NULL) 
-    {
-      /* Correct ordering here is crucial.  We must set
-         cur->pagedir to NULL before switching page directories,
-         so that a timer interrupt can't switch back to the
-         process page directory.  We must activate the base page
-         directory before destroying the process's page
-         directory, or our active page directory will be one
-         that's been freed (and cleared). */
-      cur->pagedir = NULL;
-      pagedir_activate (NULL);
-      pagedir_destroy (pd);
-    }
+  {
+    /* Correct ordering here is crucial.  We must set
+       cur->pagedir to NULL before switching page directories,
+       so that a timer interrupt can't switch back to the
+       process page directory.  We must activate the base page
+       directory before destroying the process's page
+       directory, or our active page directory will be one
+       that's been freed (and cleared). */
+    cur->pagedir = NULL;
+    pagedir_activate (NULL);
+    pagedir_destroy (pd);
+  }
 }
 
 /* Sets up the CPU for running user code in the current
@@ -461,10 +462,10 @@ load (const char *cmdline, void (**eip) (void), void **esp)
   lock_acquire(&filesys_lock);
   file = filesys_open (filename);
   if (file == NULL) 
-    {
-      printf ("load: %s: open failed\n", filename);
-      goto done; 
-    }
+  {
+    printf ("load: %s: open failed\n", filename);
+    goto done; 
+  }
   p->execFile = file;
   file_deny_write(p->execFile);
 
@@ -478,75 +479,75 @@ load (const char *cmdline, void (**eip) (void), void **esp)
       || ehdr.e_version != 1
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
-    {
-      printf ("load: %s: error loading executable\n", filename);
-      goto done; 
-    }
+  {
+    printf ("load: %s: error loading executable\n", filename);
+    goto done; 
+  }
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) 
+  {
+    struct Elf32_Phdr phdr;
+
+    if (file_ofs < 0 || file_ofs > file_length (file))
+      goto done;
+    file_seek (file, file_ofs);
+
+    if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+      goto done;
+    file_ofs += sizeof phdr;
+    switch (phdr.p_type) 
     {
-      struct Elf32_Phdr phdr;
-
-      if (file_ofs < 0 || file_ofs > file_length (file))
-        goto done;
-      file_seek (file, file_ofs);
-
-      if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
-        goto done;
-      file_ofs += sizeof phdr;
-      switch (phdr.p_type) 
+    case PT_NULL:
+    case PT_NOTE:
+    case PT_PHDR:
+    case PT_STACK:
+    default:
+      /* Ignore this segment. */
+      break;
+    case PT_DYNAMIC:
+    case PT_INTERP:
+    case PT_SHLIB:
+      goto done;
+    case PT_LOAD:
+      if (validate_segment (&phdr, file)) 
+      {
+        bool writable = (phdr.p_flags & PF_W) != 0;
+        uint32_t file_page = phdr.p_offset & ~PGMASK;
+        uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
+        uint32_t page_offset = phdr.p_vaddr & PGMASK;
+        uint32_t read_bytes, zero_bytes;
+        if (phdr.p_filesz > 0)
         {
-        case PT_NULL:
-        case PT_NOTE:
-        case PT_PHDR:
-        case PT_STACK:
-        default:
-          /* Ignore this segment. */
-          break;
-        case PT_DYNAMIC:
-        case PT_INTERP:
-        case PT_SHLIB:
-          goto done;
-        case PT_LOAD:
-          if (validate_segment (&phdr, file)) 
-            {
-              bool writable = (phdr.p_flags & PF_W) != 0;
-              uint32_t file_page = phdr.p_offset & ~PGMASK;
-              uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
-              uint32_t page_offset = phdr.p_vaddr & PGMASK;
-              uint32_t read_bytes, zero_bytes;
-              if (phdr.p_filesz > 0)
-                {
-                  /* Normal segment.
-                     Read initial part from disk and zero the rest. */
-                  read_bytes = page_offset + phdr.p_filesz;
-                  zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
-                                - read_bytes);
-                }
-              else 
-                {
-                  /* Entirely zero.
-                     Don't read anything from disk. */
-                  read_bytes = 0;
-                  zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
-                }
-                  lock_release(&filesys_lock);
-              if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
-                {
-                  // printf("load1\n");
-                  lock_acqure(&filesys_lock); 
-                  goto done;
-                }
-              else lock_acquire(&filesys_lock);
-            }
-          else
-            goto done;
-          break;
+          /* Normal segment.
+             Read initial part from disk and zero the rest. */
+          read_bytes = page_offset + phdr.p_filesz;
+          zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
+                        - read_bytes);
         }
+        else 
+        {
+          /* Entirely zero.
+             Don't read anything from disk. */
+          read_bytes = 0;
+          zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
+        }
+        lock_release(&filesys_lock);
+        if (!load_segment (file, file_page, (void *) mem_page,
+                           read_bytes, zero_bytes, writable))
+        {
+          // printf("load1\n");
+          lock_acqure(&filesys_lock); 
+          goto done;
+        }
+        else lock_acquire(&filesys_lock);
+      }
+      else
+        goto done;
+      break;
     }
+  }
 
   /* Set up stack. */
   lock_release(&filesys_lock);
@@ -642,55 +643,32 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
-    {
-      
-      /* Calculate how to fill this page.
-         We will read PAGE_READ_BYTES bytes from FILE
-         and zero the final PAGE_ZERO_BYTES bytes. */
-      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-      size_t page_zero_bytes = PGSIZE - page_read_bytes;
-      /* Get a page of memory. */ 
-      // uint8_t *kpage = palloc_get_page (PAL_USER);
-      // uint8_t *kpage = frame_get_page (PAL_USER, upage);
-      // if (kpage == NULL)
-      //   return false;
+  {
+    
+    /* Calculate how to fill this page.
+       We will read PAGE_READ_BYTES bytes from FILE
+       and zero the final PAGE_ZERO_BYTES bytes. */
+    size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+    size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      struct thread* t = thread_current();
-      struct hash* spt = &t->supplementary_page_table;
-      // printf("\nWW\n");
-      struct page* spt_entry = supplementary_page_table_put(spt, upage);
-      // struct page* spt_entry = supplementary_page_table_lookup(spt, upage);
-      spt_entry->executable = true;
-      spt_entry->page_read_bytes = page_read_bytes;
-      spt_entry->kpage = 0;
-      spt_entry->writable = writable;
-      spt_entry->ofs = file_tell(file);
-      spt_entry->mmentry = NULL;
-      file_seek(file,file_tell(file) + page_read_bytes);
-      /* Load this page. */
-            // printf("DIFF: %d %d\n",spt_entry->ofs,file_tell(file));
-      // file_read (file, kpage, page_read_bytes);
-      // if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-      //   {
-      //     // palloc_free_page (kpage);
-      //     frame_free_page(kpage);
-      //    return false; 
-      //  }
-      // memset (kpage + page_read_bytes, 0, page_zero_bytes);
+    struct thread* t = thread_current();
+    struct hash* spt = &t->supplementary_page_table;
 
-      /* Add the page to the process's address space. */
-      // if (!install_page (upage, kpage, writable)) 
-      //  {
-      //    palloc_free_page (kpage);
-      //    frame_free_page(kpage);
-      //    return false; 
-      //  }
+    struct page* spt_entry = supplementary_page_table_put(spt, upage);
 
-      /* Advance. */
-      read_bytes -= page_read_bytes;
-      zero_bytes -= page_zero_bytes;
-      upage += PGSIZE;
-    }
+    spt_entry->executable = true;
+    spt_entry->page_read_bytes = page_read_bytes;
+    spt_entry->kpage = 0;
+    spt_entry->writable = writable;
+    spt_entry->ofs = file_tell(file);
+    spt_entry->mmentry = NULL;
+    file_seek(file,file_tell(file) + page_read_bytes);
+
+    /* Advance. */
+    read_bytes -= page_read_bytes;
+    zero_bytes -= page_zero_bytes;
+    upage += PGSIZE;
+  }
   return true;
 }
 
@@ -754,28 +732,26 @@ setup_stack (void **esp, char* filename, char* save_ptr)
   uint8_t *kpage;
   bool success = false;
 
-  // kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   uint8_t* uaddr = ((uint8_t *) PHYS_BASE) - PGSIZE;
-  // printf("before get page\n");
-  kpage = frame_get_page (PAL_USER | PAL_ZERO, (void*)uaddr);
-  // printf("after get page\n");
-  if (kpage != NULL) 
-    {
-      success = install_page (uaddr, kpage, true);
-      if (success)
-      {
-        struct hash* spt = &thread_current()->supplementary_page_table;
-        struct page* supp_page = supplementary_page_table_lookup(spt, uaddr);
-        // printf("first page:%p", uaddr);
-        supp_page->writable = true;
 
-        *esp = PHYS_BASE;
-        setup_arguments(esp, filename, save_ptr);
-      }
-      else
-        // palloc_free_page (kpage);
-        frame_free_page(kpage);
+  kpage = frame_get_page (PAL_USER | PAL_ZERO, (void*)uaddr);
+
+  if (kpage != NULL) 
+  {
+    success = install_page (uaddr, kpage, true);
+    if (success)
+    {
+      struct hash* spt = &thread_current()->supplementary_page_table;
+      struct page* supp_page = supplementary_page_table_lookup(spt, uaddr);
+
+      supp_page->writable = true;
+
+      *esp = PHYS_BASE;
+      setup_arguments(esp, filename, save_ptr);
     }
+    else
+      frame_free_page(kpage);
+  }
   return success;
 }
 
@@ -799,49 +775,46 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
+bool
+install_other_page (void *upage, void *kpage, bool writable, uint32_t *pd)
+{
+  return (pagedir_get_page (pd, upage) == NULL
+    && pagedir_set_page (pd, upage, kpage, writable));
+}
+
 struct frame* 
 lazy_load_segment(struct page* fault_page, struct file* file)
 {
-  // printf("lazy kpage:%p\n", fault_page->kpage);
-    //PANIC("here\n\n\n");
   fault_page->kpage = frame_get_locked_page(PAL_USER, fault_page->vaddr);
   install_other_page(fault_page->vaddr,fault_page->kpage,fault_page->writable,fault_page->pd);
-  // struct process* process = get_process(thread_current()->tid);
+
   lock_acquire(&filesys_lock);
   file_seek (file, fault_page->ofs);
   int page_read_bytes = fault_page->page_read_bytes;
   if(page_read_bytes > 0)
   {
-    // printf("LAZY: %p %d\n",fault_page->kpage,file_tell(process->execFile));
-    // printf("S: %s\n",fault_page->kpage);
     file_read(file,fault_page->kpage,page_read_bytes);
   }
   memset(fault_page->kpage + page_read_bytes,0,PGSIZE - page_read_bytes);
   lock_release(&filesys_lock);
   return frame_table_lookup(fault_page->kpage);
-  // frame_table_lookup(fault_page->kpage)->locked = true;
-  // printf("E: %s\n",fault_page->kpage);
-
-  // printf("\nABC\n");
 }
 
 void
-grow_stack(void* fault_addr, struct intr_frame* f)
+grow_stack(void* fault_addr, struct intr_frame* f,struct process* proc)
 {
-  struct process* proc = get_process(thread_current()->tid);
   void* process_bottom = (void*)(PHYS_BASE - proc->num_stack_pages * PGSIZE);
   int distance = ROUND_UP((uint64_t)process_bottom - (uint64_t)fault_addr, PGSIZE);
 
   int num_new_pages = distance / PGSIZE;
 
-  // printf("process_bottom:%p distance:%d\n", process_bottom, distance);
   int i;
   for (i=0; i<num_new_pages; i++)
   {
     void* new_upage = (void*)((int)process_bottom - ((i+1) * PGSIZE));
     void* new_kpage = frame_get_page(PAL_USER, new_upage);
-    struct hash* spt = &thread_current()->supplementary_page_table;
-    // struct page* supp_page = supplementary_page_table_lookup(spt, new_upage);
+    struct hash* spt = &thread_get(proc->tid)->supplementary_page_table;
+
     install_page(new_upage, new_kpage, true);
     proc->num_stack_pages++;
   }
@@ -880,13 +853,12 @@ void null_children (struct process* parent)
 
 void free_filehandles() 
 {
-  struct process* p = get_process(thread_current()->tid);
+  struct process* p = process_current();
    
   while (!list_empty (&p->file_list))
   {
     struct list_elem* e = list_pop_front(&p->file_list);
     struct file_handle* fh = list_entry(e, struct file_handle, elem);
-    //list_remove(e);
     file_close(fh->f);
     free(fh);
   }
@@ -895,15 +867,15 @@ void free_filehandles()
 
 void cleanup_process (uint32_t status, struct intr_frame *f)
 {
-  struct process* cur_process = get_process(thread_current()->tid);
+  struct process* cur_process = process_current();
   struct process* parent = get_parent(cur_process);
 
   frame_cleanup();
-  // printf("cleanup_process\n");
+  mmap_cleanup(f,thread_current());
+
   lock_acquire(&filesys_lock);
   file_close(cur_process->execFile);
   free_filehandles();
-  mmap_cleanup(f);
   lock_release(&filesys_lock);
 
   if(parent != NULL && !parent->exited) 

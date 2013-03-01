@@ -11,15 +11,19 @@ struct page
 	uint32_t *pd; //page directory
 	struct process* process;
 	void *vaddr; //virtual address
+	uint8_t* kpage;	
+
 	mapid_t mapid; //map id
 	struct mmap_entry* mmentry; //null if not mmapped
-	struct swap_slot* sslot; //null if not in swap table 
-	bool executable; 
+
+	off_t ofs;
+
+	bool executable;
+	int page_read_bytes; //zero page if read_bytes==0
+
 	bool evicted;
 	size_t swap_slot;
-	int page_read_bytes; //zero page if read_bytes==0
-	uint8_t* kpage;	
-	off_t ofs;
+	
 	bool writable;
 	struct hash_elem helem;
 };

@@ -680,15 +680,20 @@ sys_mmap(int fd, void *upage, struct intr_frame *f)
    struct hash* spt = &t->supplementary_page_table;
    /* Insert an entry into the hash table */
    int array_size = (length + PGSIZE-1)/PGSIZE;
-   mmap_table_put(mpt, p->mapid, array_size); 
-   struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, p->mapid);
+   struct mmap_entry* mpt_entry = mmap_table_put(mpt, p->mapid, array_size,fi); 
+   if (mpt_entry == NULL)
+   {
+     f->eax = -1;
+	   return;
+   }
+   // struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, p->mapid);
    //if (mpt_entry == NULL) printf("NULL\n");
    //mpt_entry->file = fi;
-   mpt_entry->size = array_size;
+   // mpt_entry->size = array_size;
    /* Keep a extra copy of the file */
    //mpt_entry->backup_file = malloc(sizeof(struct file));
    //memcpy(mpt_entry->backup_file, fi, sizeof(struct file));
-   mpt_entry->backup_file = file_reopen(fi);
+   // mpt_entry->backup_file = file_reopen(fi);
    int count = 0;
 
    /* Load segment */
@@ -715,20 +720,17 @@ sys_mmap(int fd, void *upage, struct intr_frame *f)
      // spt_entry->kpage = kpage;
      spt_entry->kpage = 0;
      spt_entry->vaddr = upage;
-     //printf("here5\n");
      spt_entry->ofs = file_tell(fi);
      spt_entry->mmentry = mpt_entry;
      file_seek(fi,file_tell(fi) + page_read_bytes);
-     //printf("here4\n");
      mpt_entry->pages[count] = spt_entry;
-     //printf("here7\n");
      read_bytes -= page_read_bytes;
      zero_bytes -= page_zero_bytes;
 
      upage += PGSIZE;
      count++;
    }
-   //printf("here8 %d\n", length);
+   
    /* Return the mapid */
    f->eax = p->mapid;
    file_seek(fi,org_ofs);
@@ -739,73 +741,17 @@ sys_mmap(int fd, void *upage, struct intr_frame *f)
 static void
 sys_munmap(mapid_t mapid, struct intr_frame *f)
 {
-  // printf("sys_munmap\n");
-  lock_acquire(&filesys_lock);
-  mmap_unmap(mapid, f);
-  lock_release(&filesys_lock);
-  // //printf("In munmap\n");
-  // //lock_acquire(&filesys_lock);
-  // struct thread* t = thread_current();
-  // struct hash* mpt = &t->mmap_page_table;
-  // struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, mapid);
-  // /* If the mapid doesn't exist for this process */
-  // if (mpt_entry == NULL)
-  // {
-  //   f->eax = -1;
-  //   return;
-  // }
-  
-  // struct file* fi = mpt_entry->backup_file;
-  // int i = 0;
-  
-  // int length = file_length(mpt_entry->backup_file);
-  // int cur_write = 0;
-  // uint32_t *pd = thread_current()->pagedir;
-
-  // for (i = 0; i < mpt_entry->size; i++) 
-  // {
-  //   struct page* page = mpt_entry->pages[i];
-  //   void* addr = page->vaddr;
-  //   /* Write the database back to the file */
-  //   /*if (write_byte < PGSIZE) 
-  //   {
-
-  //   } else 
-  //   {
-
-  //   }*/
-  //   if (pagedir_get_page(pd, addr) != NULL) 
-  //   {
-  //     //printf("here %d %d %s\n", page->page_read_bytes, page->ofs, addr);
-  //     //if (fi->deny_write) printf("deny write\n");
-  //     file_write_at(fi, addr, page->page_read_bytes, page->ofs);
-  //   }
-  //   //cur_write += ;
-  //   //printf("there\n");
-  //   /* Remove from frame page */
-  //   //frame_free_page(page->kpage);
-  //   pagedir_clear_page(pd, addr);
-  //   supplementary_page_table_remove(
-  //     &(thread_current()->supplementary_page_table), addr);
-  // }
-  
-
-  // free(mpt_entry->backup_file);
-  // mmap_table_remove(mpt, mapid);
-  // //lock_release(&filesys_lock);
+  mmap_unmap_file(mapid, f,thread_current());
 }
 
 static void
 sys_seek (int fd, int position)
 {
-  //printf("S: %d %d\n",fd,thread_current()->tid);
-  // printf("sys_seek\n");
   lock_acquire(&filesys_lock);
   struct file_handle* fh = find_file_handle(fd);
 
    if(fh == NULL)
   {
-    //printf("HERE %d %d\n",fd,thread_current()->tid);
     lock_release(&filesys_lock);
     return;
   }
@@ -817,7 +763,6 @@ sys_seek (int fd, int position)
 static void
 sys_tell (int fd,struct intr_frame* f)
 {
-  // printf("sys_tell\n");
   lock_acquire(&filesys_lock);
   struct file_handle* fh = find_file_handle(fd);
    if(fh == NULL)
@@ -835,7 +780,6 @@ sys_tell (int fd,struct intr_frame* f)
 static void
 sys_close (int fd, struct intr_frame *f) 
 {
-  // printf("sys_close\n");
   lock_acquire(&filesys_lock);
   struct file_handle* fh = find_file_handle(fd);
 

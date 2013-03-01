@@ -40,24 +40,21 @@ supplementary_page_table_init(struct hash* spt)
 struct page*
 supplementary_page_table_put(struct hash* spt, void *vaddr)
 {
-	// printf("table size:%d\n", hash_size(spt));
 	ASSERT ((int)vaddr % PAGE_SIZE == 0);
-	// if (supplementary_page_table_lookup(spt, vaddr) != NULL)
-	// {
-	// 	// printf("SUCK\n");
-	// 	return NULL;
-	// }
 
 	lock_acquire(&thread_current()->spt_lock);
 	struct page* p = malloc(sizeof(struct page));	
-	if (p == NULL) PANIC("NO MALLOC SPACE\n");
+
+	if (p == NULL) return NULL;
+
 	p->pd = thread_current()->pagedir;
+	p->process = process_current();
+
 	p->vaddr = vaddr;
-	p->evicted = false;
-	p->writable = true;
 	p->mmentry = NULL;
 	p->executable = false;
-	p->process = process_current();
+	p->evicted = false;
+	p->writable = true;
 
 	struct hash_elem* helem = hash_insert(spt, &(p->helem));
 
@@ -71,10 +68,7 @@ struct page*
 supplementary_page_table_lookup(struct hash* spt, void* vaddr)
 {
 	lock_acquire(&thread_current()->spt_lock);
-	//allign user address to page boundaries
 	void* page = (void*)ROUND_DOWN((uint64_t)vaddr, (uint64_t)PAGE_SIZE);
-	// void* page = (void*)(((int)vaddr/PAGE_SIZE) * PAGE_SIZE);
-	// printf("vaddr:%p roudned page:%p\n", vaddr, page);
 	struct page p;
 	struct hash_elem *e;
 

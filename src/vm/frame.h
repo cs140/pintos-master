@@ -19,7 +19,6 @@ struct lock frame_lock;
 struct hash frame_table;
 
 bool frame_table_init(void);
-struct frame* frame_table_put(void *paddr, void *uaddr);
 struct frame* frame_table_lookup(void* paddr);
 struct frame* frame_table_remove(void* paddr);
 void* frame_get_page(enum palloc_flags, void *uaddr);

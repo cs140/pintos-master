@@ -162,14 +162,11 @@ page_fault (struct intr_frame *f)
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
   struct hash* spt = &thread_current()->supplementary_page_table;
-  //printf("fault_addr:%p\n", fault_addr);
   struct page* fault_page = supplementary_page_table_lookup
                                          (spt,
-                                          fault_addr);
-  // printf("fault_addr:%p %u\n", fault_addr, fault_addr);
-  // printf("f->esp:%p %u\n", f->esp, f->esp);      
+                                          fault_addr);     
 
-  struct process* proc = get_process(thread_current()->tid);
+  struct process* proc = process_current();
   void* process_bottom = (void*)(PHYS_BASE - proc->num_stack_pages * PGSIZE);                                      
   
   if(fault_addr < process_bottom)
@@ -178,35 +175,19 @@ page_fault (struct intr_frame *f)
     || (int)fault_addr == (int)f->esp - PUSHA_DIST
     || (fault_addr > f->esp))
     {
-      // printf("GROW STACK\n");
-      // printf("PHYS_BASE:%u\n", PHYS_BASE);
-      // printf("PROC_BOTTOM:%u\n", process_bottom);
-      // printf("ESP:%u\n", f->esp);
-      // printf("fault_addr:%u\n", fault_addr);
-      // if (fault_page->evicted) printf("PAGE EVICTED\n");
-      grow_stack(fault_addr, f);
+      grow_stack(fault_addr, f,proc);
       return;
     }
   }
 
-  bool valid_address = false;
   if(fault_page != NULL && 
     (fault_page->executable || fault_page->mmentry != NULL || fault_page->evicted) &&
     !(write && !fault_page->writable)) 
-    valid_address = true;
-  // /* No data at the virtual address */
-  //  if (fault_page == NULL) {
-  //    valid_address = false;
-  //  } else { 
-  //    if ((!is_user_vaddr(fault_page->vaddr) && user) || (!not_present)) {
-  //        valid_address = false;
-  //    }
-  //     // printf("\nC\n");
-  //    if(fault_page->executable) valid_address = true;
-  //  }
-  //  // printf("\nD\n");
-    // valid_address = false;
-  if (!valid_address) {
+  {
+    supplementary_page_load(fault_page,false);
+  }
+  else 
+  {
     printf ("Page fault at %p: %s error %s page in %s context.\n",
             fault_addr,
             not_present ? "not present" : "rights violation",
@@ -216,67 +197,27 @@ page_fault (struct intr_frame *f)
     cleanup_process(-1, f);
     kill (f);
   } 
-  else 
-  {
-    //printf("In page fault\n");
-    supplementary_page_load(fault_page,false);
-  }
-
-  // else {
-  //   /* Locate the data */
-  //   if (fault_page->mmentry != NULL) {
-  //     /* Read from disk */
-  //     // mmap_in(fault_page->mmentry, fault_addr);
-  //     return;
-  //   } 
-
-  //   if (fault_page->sslot != NULL) {
-  //     /* Read from swap slot */
-  //     // swap_in(fault_page->sslot, fault_addr);
-  //     return;
-  //   }
-
-  //   if (fault_page->zeroed) {
-  //     /* TODO something */
-  //     return;
-  //   }
-  // }
 }
 
 struct frame*
 supplementary_page_load(struct page* fault_page, bool locked)
 {
-  //printf("fault fucker\n\n\n\n");
-  // printf("supp load finished:%p %d\n", fault_page->vaddr,fault_page->pd);
-  // if (fault_page->evicted) printf("EVICTED\n");
-  // else if (fault_page->executable) printf("EXECUTABLE\n");
-  // else if (fault_page->mmentry != NULL) printf("MMAPPED\n");
-  // else printf("NONE\n");
+  struct frame* frame = NULL;
   if (fault_page->mmentry != NULL) 
   {
-    //printf("Mmap\n");
-    //struct file* fi = file_reopen(fault_page->mmentry->backup_file);
-    //fault_page->mmentry->file = fi;
-    struct frame* frame = lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
-    frame->locked = locked;
-    return frame;
-    //file_close(fi);
-  } else if (fault_page->evicted)
+    frame = lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
+  } 
+  else if (fault_page->evicted)
   {
-    //printf("EVICTED\n");
-    struct frame* frame = read_from_swap(fault_page);
-    frame->locked = locked;
-    return frame;
+    frame = read_from_swap(fault_page);
   }
   else if(fault_page->executable)
   {
-    //printf("\n");
-    //printf("start lazy load exec\n");
     struct process* process = fault_page->process;
-    struct frame* frame = lazy_load_segment(fault_page, process->execFile);
-    frame->locked = locked;
-    return frame;
+    frame = lazy_load_segment(fault_page, process->execFile);
   } 
-  else PANIC("MORE FUCKS\n");
+
+  frame->locked = locked;
+  return frame;
 }
 
