@@ -10,6 +10,6 @@
 
 void exception_init (void);
 void exception_print_stats (void);
-void supplementary_page_load(struct page* fault_page);
+struct frame* supplementary_page_load(struct page* fault_page, bool locked);
 
 #endif /* userprog/exception.h */

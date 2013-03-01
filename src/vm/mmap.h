@@ -29,5 +29,6 @@ struct mmap_entry* mmap_table_remove(struct hash* mpt, mapid_t mapid);
 
 void mmap_cleanup(struct intr_frame* f);
 void mmap_unmap(mapid_t mapid, struct intr_frame* f);
+bool mmap_unmap_page(struct frame* frame);
 
 #endif 

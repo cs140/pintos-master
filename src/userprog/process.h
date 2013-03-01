@@ -51,7 +51,7 @@ struct process* get_parent(struct process* process);
 struct process* get_process_recursive(tid_t tid, struct process* process);
 struct process* add_process(tid_t parent_tid, tid_t child_tid); 
 void remove_process(tid_t parent_tid, tid_t child_tid);
-void lazy_load_segment(struct page* fault_page, struct file* file);
+struct frame* lazy_load_segment(struct page* fault_page, struct file* file);
 void grow_stack(void* fault_addr, struct intr_frame* f);
 struct file_handle* find_file_handle(int fd);
 void null_children(struct process* parent);

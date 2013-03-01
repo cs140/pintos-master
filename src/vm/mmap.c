@@ -82,7 +82,6 @@ void
 mmap_unmap(mapid_t mapid, struct intr_frame* f)
 {
     //printf("In munmap\n");
-  //lock_acquire(&filesys_lock);
   struct thread* t = thread_current();
   struct hash* mpt = &t->mmap_page_table;
   struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, mapid);
@@ -115,20 +114,52 @@ mmap_unmap(mapid_t mapid, struct intr_frame* f)
     {
       //printf("here %d %d %s\n", page->page_read_bytes, page->ofs, addr);
       //if (fi->deny_write) printf("deny write\n");
+        // lock_acquire(&filesys_lock);
       file_write_at(fi, addr, page->page_read_bytes, page->ofs);
+      // lock_release(&filesys_lock);
     }
     //cur_write += ;
     //printf("there\n");
     /* Remove from frame page */
     //frame_free_page(page->kpage);
-    pagedir_clear_page(pd, addr);
+    if (pagedir_get_page(pd, addr) != NULL) pagedir_clear_page(pd, addr);
     struct page* p = supplementary_page_table_remove(
       &(thread_current()->supplementary_page_table), addr);
+    // printf("unmap:%p\n", p->vaddr);
     if (p != NULL) free(p);
   }
   
 
   free(mpt_entry->backup_file);
   mmap_table_remove(mpt, mapid);
-  //lock_release(&filesys_lock);
+}
+
+bool 
+mmap_unmap_page(struct frame* frame)
+{
+  if (frame == NULL) PANIC("Frame is NULL\n");
+
+  uint32_t *pd = frame->supplementary_page->pd;
+  struct mmap_entry* mpt_entry = frame->supplementary_page->mmentry;
+  struct file* fi = mpt_entry->backup_file;
+  int index = ((uint64_t)frame->uaddr - (uint64_t)mpt_entry->pages[0]->vaddr) / 4096;
+  // printf ("unmap size = %d index = %d\n", file_length(fi)/4096, index);
+  //PANIC("index = %d\n", index);
+  struct page* page = mpt_entry->pages[index];
+
+  if (pagedir_get_page(pd, frame->uaddr) != NULL && 
+      pagedir_is_dirty(pd, frame->uaddr) == true) 
+    {
+      // printf ("ACTUALLY FUCKING WRITE unmap size = %d index = %d\n", file_length(fi)/4096, index);
+      //PANIC("Write %d byte at offset %d\n",page->page_read_bytes, page->ofs);
+      // bool fs = lock_held_by_current_thread(&filesys_lock);
+      // printf("try to acquire lock-");
+      lock_acquire(&filesys_lock);
+      // printf("acquired\n");
+      file_write_at(fi, frame->paddr, page->page_read_bytes, page->ofs);
+      lock_release(&filesys_lock);
+    }
+  if (pagedir_get_page(pd, frame->uaddr) != NULL) pagedir_clear_page(pd, frame->uaddr);
+   // printf ("done unmap size = %d index = %d\n", file_length(fi)/4096, index);
+  return true;
 }

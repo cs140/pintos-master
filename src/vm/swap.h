@@ -15,7 +15,7 @@ struct swap_pool
 void swap_init (void);
 void* swap_get_frame(struct frame* evict);
 bool swap_out(struct frame* frame);
-void read_from_swap(struct page* fault_page);
+struct frame* read_from_swap(struct page* fault_page);
 bool install_other_page (void *upage, void *kpage, 
 	bool writable, uint32_t *pd);
 

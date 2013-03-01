@@ -218,8 +218,8 @@ page_fault (struct intr_frame *f)
   } 
   else 
   {
-      // printf("In page fault\n");
-    supplementary_page_load(fault_page);
+    //printf("In page fault\n");
+    supplementary_page_load(fault_page,false);
   }
 
   // else {
@@ -243,33 +243,40 @@ page_fault (struct intr_frame *f)
   // }
 }
 
-void
-supplementary_page_load(struct page* fault_page)
+struct frame*
+supplementary_page_load(struct page* fault_page, bool locked)
 {
-  printf("supp load finished:%p %d\n", fault_page->vaddr,fault_page->pd);
+  //printf("fault fucker\n\n\n\n");
+  // printf("supp load finished:%p %d\n", fault_page->vaddr,fault_page->pd);
   // if (fault_page->evicted) printf("EVICTED\n");
   // else if (fault_page->executable) printf("EXECUTABLE\n");
   // else if (fault_page->mmentry != NULL) printf("MMAPPED\n");
   // else printf("NONE\n");
-  if (fault_page->evicted)
+  if (fault_page->mmentry != NULL) 
   {
-    // printf("EVICTED\n");
-    read_from_swap(fault_page);
+    //printf("Mmap\n");
+    //struct file* fi = file_reopen(fault_page->mmentry->backup_file);
+    //fault_page->mmentry->file = fi;
+    struct frame* frame = lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
+    frame->locked = locked;
+    return frame;
+    //file_close(fi);
+  } else if (fault_page->evicted)
+  {
+    //printf("EVICTED\n");
+    struct frame* frame = read_from_swap(fault_page);
+    frame->locked = locked;
+    return frame;
   }
   else if(fault_page->executable)
   {
-    // printf("B\n");
-     //printf("start lazy load exec\n");
+    //printf("\n");
+    //printf("start lazy load exec\n");
     struct process* process = fault_page->process;
-    lazy_load_segment(fault_page, process->execFile);
+    struct frame* frame = lazy_load_segment(fault_page, process->execFile);
+    frame->locked = locked;
+    return frame;
   } 
-  else if (fault_page->mmentry != NULL) 
-  {
-        // printf("C\n");
-    //struct file* fi = file_reopen(fault_page->mmentry->backup_file);
-    //fault_page->mmentry->file = fi;
-    lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
-    //file_close(fi);
-  }
+  else PANIC("MORE FUCKS\n");
 }
 

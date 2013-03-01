@@ -1,9 +1,11 @@
 #include <debug.h>
 #include "frame.h"
+#include "lib/round.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 #include "vm/page.h"
 #include "vm/swap.h"
 
@@ -14,6 +16,7 @@ unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED);
 bool frame_less(const struct hash_elem *a, const struct hash_elem *b, 
 	void *aux);
 struct process* frame_get_process(struct hash_elem* e);
+static struct frame* frame_get_page_core(enum palloc_flags,void* uaddr);
 
 unsigned
 frame_hash (const struct hash_elem *f_, void *aux UNUSED)
@@ -47,17 +50,11 @@ frame_table_init(void)
 struct frame*
 frame_table_put(void *paddr, void *uaddr)
 {
-	// printf("frame table size:%d \n", hash_size(&frame_table));
 	ASSERT ((int)uaddr % PAGE_SIZE == 0);
-	// if (frame_table_lookup(paddr) != NULL)
-	// {
-	// 	// printf("FACK\n");
-	// 	return NULL;
-	// }
 
 	struct frame* f = malloc(sizeof(struct frame));
 	if (f == NULL) {
-		PANIC("MALLOC FAIL?!\n");
+		return NULL;
 	}
 	f->paddr = paddr;
 	f->uaddr = uaddr;
@@ -65,10 +62,9 @@ frame_table_put(void *paddr, void *uaddr)
 
 	struct hash_elem* helem = hash_insert(&frame_table, &f->helem);
 	if(helem == NULL) 
-		{
-			// if(paddr == 0xc0286000) PANIC("BACKTRACE %p %d\n",paddr,thread_current()->tid);
-			return f;
-		}
+	{
+		return f;
+	}
 	else 
 	{
 		// PANIC("paddr: %p %d\n",paddr,thread_current()->tid);
@@ -76,12 +72,11 @@ frame_table_put(void *paddr, void *uaddr)
 	}	
 }
 
-struct frame*
-frame_table_lookup(void* paddr)
+static struct frame*
+frame_table_lookup_core(void *paddr)
 {
-	lock_acquire(&frame_lock);
 	//allign user address to page boundaries
-	void* page = (void*)(((int)paddr/PAGE_SIZE) * PAGE_SIZE);
+	void* page = (void*)ROUND_DOWN((uint64_t)paddr, (uint64_t)PAGE_SIZE);
 	struct frame f;
 	struct hash_elem *e;
 
@@ -89,6 +84,15 @@ frame_table_lookup(void* paddr)
 	e = hash_find(&frame_table, &f.helem);
 
 	struct frame* lookup_frame = e != NULL ? hash_entry (e, struct frame, helem) : NULL;
+	return lookup_frame;
+}
+
+struct frame*
+frame_table_lookup(void* paddr)
+{
+	lock_acquire(&frame_lock);
+	
+	struct frame* lookup_frame = frame_table_lookup_core(paddr);
 
 	lock_release(&frame_lock);
 
@@ -112,21 +116,21 @@ frame_table_remove(void *paddr)
 	return removed; 
 }
 
-void get_lock()
+void* frame_get_locked_page(enum palloc_flags flags,void* uaddr)
 {
 	lock_acquire(&frame_lock);
-}
 
-void release_lock()
-{
+	struct frame* frame = frame_get_page_core(flags,uaddr);
+
+	frame->locked = true;
+	
 	lock_release(&frame_lock);
+	return frame->paddr;
 }
 
-void*
-uframe_get_page(enum palloc_flags flags, void *uaddr) 
+static struct frame* frame_get_page_core(enum palloc_flags flags,void* uaddr)
 {
 	ASSERT ((flags & PAL_USER) != 0);
-	// lock_acquire(&frame_lock);
 
 	void* page = palloc_get_page(flags);
 
@@ -141,31 +145,19 @@ uframe_get_page(enum palloc_flags flags, void *uaddr)
 	
 	struct frame* frame = frame_table_put(page, uaddr);
 	frame->supplementary_page = supp_page;
-	// lock_release(&frame_lock);
-	return page;
+
+	return frame;
 }
 
 void*
 frame_get_page(enum palloc_flags flags, void *uaddr) 
 {
-	ASSERT ((flags & PAL_USER) != 0);
 	lock_acquire(&frame_lock);
 
-	void* page = palloc_get_page(flags);
+	struct frame* frame = frame_get_page_core(flags,uaddr);
 
-	if (page == NULL)
-	{
-		struct frame* evict = frame_get_evict();
-		page = swap_get_frame(evict);
-	}
-
-	struct hash* spt = &thread_current()->supplementary_page_table;
-	struct page* supp_page = supplementary_page_table_put(spt, uaddr);
-	
-	struct frame* frame = frame_table_put(page, uaddr);
-	frame->supplementary_page = supp_page;
 	lock_release(&frame_lock);
-	return page;
+	return frame->paddr;
 }
 
 struct frame*
@@ -181,22 +173,25 @@ frame_get_evict()
 	    struct frame* f = hash_entry(hash_cur(&i), 
 	      struct frame, helem);
 
-	    if(!f->locked) 
-	    {
-	    	if (pagedir_is_accessed(f->supplementary_page->pd, f->uaddr))
-	    	{
-	    		pagedir_set_accessed(f->supplementary_page->pd, f->uaddr, false);
-	    	} else 
-	    	{
-	    		if (pagedir_is_dirty(f->supplementary_page->pd, f->uaddr))
-	    		{
-	    			pagedir_set_dirty(f->supplementary_page->pd, f->uaddr, false);
-					//clear dirty bit and write page to disk, TODO SYNCHRONIZATION
-	    		}
-	    		// lock_release(&frame_lock);
-	    		return f;
-	    	}
-	    }
+	   
+    	if (pagedir_is_accessed(f->supplementary_page->pd, f->uaddr))
+    	{
+    		pagedir_set_accessed(f->supplementary_page->pd, f->uaddr, false);
+    	} else 
+    	{
+    		if (pagedir_is_dirty(f->supplementary_page->pd, f->uaddr))
+    		{
+    			//pagedir_set_dirty(f->supplementary_page->pd, f->uaddr, false);
+				//clear dirty bit and write page to disk, TODO SYNCHRONIZATION
+    		}
+    		// lock_release(&frame_lock);
+    		if(!f->locked) 
+    		{
+    			// printf("evict frame:%p\n", f->uaddr);
+    			f->locked = true;
+    			return f;
+    		}
+    	}
 	  }
   }
 
@@ -218,6 +213,7 @@ frame_free_page(void *page)
 		free(f); //free if not null
 		struct hash* spt = &thread_current()->supplementary_page_table;
 		struct page* p = supplementary_page_table_remove(spt, f->uaddr);
+		printf("free:%p\n", p->vaddr);
 		if (p != NULL) free(p);	
 	}
 	
@@ -270,3 +266,79 @@ frame_cleanup(void)
 
 	lock_release(&frame_lock);
 }
+
+void 
+frame_set_page_lock(void* base, int length, bool locked)
+{
+	lock_acquire(&frame_lock);
+
+	void* ueaddr = (void*)((char*)base + length - 1);
+
+	struct hash* spt = &thread_current()->supplementary_page_table;
+
+	const void* cur;
+	for(cur=base; cur < ueaddr; cur+=4096)
+	{
+		void* kaddr = pagedir_get_page(thread_current()->pagedir, cur);
+		struct frame* f = frame_table_lookup_core(kaddr);
+		if(f == NULL)
+		{
+			lock_release(&frame_lock);
+			struct page* supp_page = supplementary_page_table_lookup(spt,cur);
+			f = supplementary_page_load(supp_page,true);
+			lock_acquire(&frame_lock);
+		}
+		// if(f == NULL) PANIC("THE FUCK\n");
+		f->locked = locked;
+		// printf("locking:%p %p %d\n", base,f->uaddr,f->locked);
+	}
+
+	void *kaddr = pagedir_get_page(thread_current()->pagedir, ueaddr);
+	struct frame* f = frame_table_lookup_core(kaddr);
+	if(f == NULL) 
+	{
+		lock_release(&frame_lock);
+		struct page* supp_page = supplementary_page_table_lookup(spt,ueaddr);
+		f = supplementary_page_load(supp_page,true);
+		lock_acquire(&frame_lock);
+	}
+	f->locked = locked;
+
+	// int i;
+	// for (i=0; i<num_pages; i++)
+	// {
+	// 	void *addr = base + i * PAGE_SIZE;
+	// 	void *kaddr = pagedir_get_page(thread_current()->pagedir, addr);
+	// 	struct frame* f = frame_table_lookup_core(kaddr);
+	// 	if(f == NULL) PANIC("THE FUCK\n");
+	// 	f->locked = locked;
+	// }
+	lock_release(&frame_lock);
+}
+
+// void
+// frame_load_locked_pages(void* base, int length)
+// {
+// 	if (base == NULL) return;
+
+// 	struct hash* spt = &thread_current()->supplementary_page_table;
+// 	void* ueaddr = (void*)((char*)base + length - 1);
+
+// 	const void* cur;
+// 	for(cur=base; cur < ueaddr; cur+=4096)
+// 	{
+// 		struct page* supp_page = supplementary_page_table_lookup(spt, cur);
+// 		if (supp_page == NULL) return;
+// 		f->locked = locked;
+
+// 		void* page = pagedir_get_page (pd, cur);
+//     	if (page == NULL) supplementary_page_load(supp_page);
+// 	}
+
+// 	struct page* supp_page = supplementary_page_table_lookup(spt, ueaddr);
+//   	if(supp_page == NULL) return;
+//   	supp_page = locked;
+
+// 	void *kaddr = pagedir_get_page(thread_current()->pagedir, ueaddr);
+// 	struct frame* f = frame_table_lookup_core(kaddr);
+// }

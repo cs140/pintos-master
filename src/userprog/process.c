@@ -457,6 +457,7 @@ load (const char *cmdline, void (**eip) (void), void **esp)
 
 
   /* Open executable file. */
+  // printf("load\n");
   lock_acquire(&filesys_lock);
   file = filesys_open (filename);
   if (file == NULL) 
@@ -531,9 +532,15 @@ load (const char *cmdline, void (**eip) (void), void **esp)
                   read_bytes = 0;
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
+                  lock_release(&filesys_lock);
               if (!load_segment (file, file_page, (void *) mem_page,
                                  read_bytes, zero_bytes, writable))
-                goto done;
+                {
+                  // printf("load1\n");
+                  lock_acqure(&filesys_lock); 
+                  goto done;
+                }
+              else lock_acquire(&filesys_lock);
             }
           else
             goto done;
@@ -542,8 +549,14 @@ load (const char *cmdline, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
+  lock_release(&filesys_lock);
   if (!setup_stack (esp, filename, save_ptr))
+  {
+    lock_acquire(&filesys_lock);
     goto done;
+  }
+  lock_acquire(&filesys_lock);
+
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -552,6 +565,7 @@ load (const char *cmdline, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   if(!success) file_close(file);
+  // printf("finished load\n");
   lock_release(&filesys_lock);
   return success;
 }
@@ -637,17 +651,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
       /* Get a page of memory. */ 
       // uint8_t *kpage = palloc_get_page (PAL_USER);
-      uint8_t *kpage = frame_get_page (PAL_USER, upage);
-      if (kpage == NULL)
-        return false;
+      // uint8_t *kpage = frame_get_page (PAL_USER, upage);
+      // if (kpage == NULL)
+      //   return false;
 
       struct thread* t = thread_current();
       struct hash* spt = &t->supplementary_page_table;
       // printf("\nWW\n");
-      struct page* spt_entry = supplementary_page_table_lookup(spt, upage);
+      struct page* spt_entry = supplementary_page_table_put(spt, upage);
+      // struct page* spt_entry = supplementary_page_table_lookup(spt, upage);
       spt_entry->executable = true;
       spt_entry->page_read_bytes = page_read_bytes;
-      spt_entry->kpage = kpage;
+      spt_entry->kpage = 0;
       spt_entry->writable = writable;
       spt_entry->ofs = file_tell(file);
       spt_entry->mmentry = NULL;
@@ -784,12 +799,16 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
-void 
+struct frame* 
 lazy_load_segment(struct page* fault_page, struct file* file)
 {
+  // printf("lazy kpage:%p\n", fault_page->kpage);
+    //PANIC("here\n\n\n");
+  fault_page->kpage = frame_get_locked_page(PAL_USER, fault_page->vaddr);
   install_other_page(fault_page->vaddr,fault_page->kpage,fault_page->writable,fault_page->pd);
   // struct process* process = get_process(thread_current()->tid);
-   file_seek (file, fault_page->ofs);
+  lock_acquire(&filesys_lock);
+  file_seek (file, fault_page->ofs);
   int page_read_bytes = fault_page->page_read_bytes;
   if(page_read_bytes > 0)
   {
@@ -798,6 +817,9 @@ lazy_load_segment(struct page* fault_page, struct file* file)
     file_read(file,fault_page->kpage,page_read_bytes);
   }
   memset(fault_page->kpage + page_read_bytes,0,PGSIZE - page_read_bytes);
+  lock_release(&filesys_lock);
+  return frame_table_lookup(fault_page->kpage);
+  // frame_table_lookup(fault_page->kpage)->locked = true;
   // printf("E: %s\n",fault_page->kpage);
 
   // printf("\nABC\n");
@@ -877,6 +899,7 @@ void cleanup_process (uint32_t status, struct intr_frame *f)
   struct process* parent = get_parent(cur_process);
 
   frame_cleanup();
+  // printf("cleanup_process\n");
   lock_acquire(&filesys_lock);
   file_close(cur_process->execFile);
   free_filehandles();
