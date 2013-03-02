@@ -9,22 +9,23 @@
 struct page
 {
 	uint32_t *pd; //page directory
-	struct process* process;
+	struct process* process; //pointer to the process 
 	void *vaddr; //virtual address
-	uint8_t* kpage;	
+	uint8_t* kpage;	//physical address
 
 	mapid_t mapid; //map id
 	struct mmap_entry* mmentry; //null if not mmapped
 
-	off_t ofs;
+	off_t ofs; //ofset into file
 
-	bool executable;
+	bool executable; //whether or not a page is for executable
 	int page_read_bytes; //zero page if read_bytes==0
+	bool executable_modified;
 
-	bool evicted;
-	size_t swap_slot;
+	bool evicted; //whether page is evicted
+	size_t swap_slot; //swap_slot in disk 
 	
-	bool writable;
+	bool writable; //whether or not page is writable
 	struct hash_elem helem;
 };
 

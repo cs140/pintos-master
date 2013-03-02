@@ -207,15 +207,16 @@ supplementary_page_load(struct page* fault_page, bool locked)
   {
     frame = lazy_load_segment(fault_page, fault_page->mmentry->backup_file);
   } 
-  else if (fault_page->evicted)
-  {
-    frame = read_from_swap(fault_page);
-  }
-  else if(fault_page->executable)
+  else if(fault_page->executable && !fault_page->executable_modified)
   {
     struct process* process = fault_page->process;
     frame = lazy_load_segment(fault_page, process->execFile);
   } 
+  else if (fault_page->evicted)
+  {
+    if(fault_page->executable && !fault_page->executable_modified) PANIC("EVICT EXEC\n");
+    frame = read_from_swap(fault_page);
+  }
 
   frame->locked = locked;
   return frame;

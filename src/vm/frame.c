@@ -120,6 +120,11 @@ void* frame_get_locked_page(enum palloc_flags flags,void* uaddr)
 	return frame->paddr;
 }
 
+static bool unmodified_executable(struct page* page)
+{
+	return page->executable && !page->executable_modified;
+}
+
 static struct frame* frame_get_page_core(enum palloc_flags flags,void* uaddr)
 {
 	ASSERT ((flags & PAL_USER) != 0);
@@ -131,8 +136,11 @@ static struct frame* frame_get_page_core(enum palloc_flags flags,void* uaddr)
 		struct frame* evict = frame_get_evict();
 		page = swap_get_frame(evict);
 
-		if(evict->supplementary_page->mmentry == NULL) 
+		if(evict->supplementary_page->mmentry == NULL &&
+			!unmodified_executable(evict->supplementary_page)); 
+		{
 			evict->supplementary_page->evicted = true;
+		}
 
 		struct frame* f = frame_table_remove(evict->paddr);
 		free(f);

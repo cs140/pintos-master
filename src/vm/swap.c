@@ -14,9 +14,11 @@
 #include "vm/swap.h"
 #include "vm/page.h"
 #include "vm/mmap.h"
+#include "devices/block.h"
 
 #define BITS_PER_BYTE 8
 #define PGSIZE 4096
+// #define MAX_SLOTS 
 
 struct swap_pool swap_table;
 
@@ -33,9 +35,11 @@ void
 init_swap_pool(void)
 {
 	lock_init(&swap_table.lock);	
-	struct block* swap_block = block_get_role(BLOCK_SWAP);
-	swap_table.swap_num_slots = block_size(swap_block) / (PGSIZE/BLOCK_SECTOR_SIZE);
-	swap_table.swap_map = bitmap_create(20000);
+	struct block* swap_block = block_get_by_name(block_type_name(BLOCK_SWAP));
+	swap_table.swap_num_slots = block_size(swap_block) / (PGSIZE / BLOCK_SECTOR_SIZE);
+	//Hardcoding swap size because block functions do NOT work
+	//swap_table.swap_map = bitmap_create(swap_table.swap_num_slots);
+	swap_table.swap_map = bitmap_create(1024);
 }
 
 void*
@@ -68,7 +72,19 @@ swap_out(struct frame* frame, bool dirty)
 	} 
 	else 
 	{
-		return write_to_swap(frame);
+		if(frame->supplementary_page->executable)
+		{
+			if(dirty || frame->supplementary_page->executable_modified)
+			{
+				frame->supplementary_page->executable_modified = true;
+				return write_to_swap(frame);
+			}
+			else return true;
+		}
+		else
+		{
+			return write_to_swap(frame);
+		}
 	}
 }
 

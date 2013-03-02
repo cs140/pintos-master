@@ -7,7 +7,6 @@
 /* This struct contains meta data surrounding a physical page */
 struct frame
 {
-	//needs to store reverse to a virtual page
 	int locked; //field that says whether or not page can be evicted
 	void *paddr; //physical page address
 	void *uaddr; //user address in page directory

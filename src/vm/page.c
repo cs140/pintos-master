@@ -53,6 +53,7 @@ supplementary_page_table_put(struct hash* spt, void *vaddr)
 	p->vaddr = vaddr;
 	p->mmentry = NULL;
 	p->executable = false;
+	p->executable_modified = false;
 	p->evicted = false;
 	p->writable = true;
 

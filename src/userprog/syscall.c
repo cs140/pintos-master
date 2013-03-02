@@ -44,6 +44,9 @@ static int num_args(enum SYSCALL_NUMBER number);
 static bool check_args(void* esp,int num_args);
 static bool check_string(const char* file);
 static bool overlap_mapped_file(void* upage, int length);
+static void load_mmap_table(struct file* fi, struct hash* mpt, 
+  struct hash* spt, struct mmap_entry* mpt_entry, void* upage); 
+static bool valid_mmap_mapping(int fd, void* upage);
 
 const void*
 check_valid_uaddr(const void * uaddr, int size) 
@@ -78,12 +81,9 @@ check_valid_uaddr(const void * uaddr, int size)
 	// one of these is out of the bounds 
 	if (keaddr==NULL) 
 	{	
-    // printf("supp_page:%p\n", ueaddr);
-		// return NULL;
     supplementary_page_load(supp_page, false);
 	}
 
-  // printf("after\n", ueaddr);
 	return uaddr;
 }
 
@@ -106,21 +106,13 @@ check_writable(const void* uaddr, int size)
   const void* cur;
   for (cur=usaddr; cur<ueaddr; cur+=4096) {
     struct page* pg = supplementary_page_table_lookup(spt, cur);
-    // if (pg == NULL) PANIC("PG NULL:%p\n", cur);
+
     if (pg == NULL || !pg->writable) return false;;
   }
 
   struct page* end_pg = supplementary_page_table_lookup(spt, ueaddr);
-  // if (end_pg == NULL) PANIC("ENDPG NULL\n");
-  if(end_pg == NULL || !end_pg->writable) return false;
-  
-  // void *keaddr = pagedir_get_page (pd, ueaddr);
 
-  // //one of these is out of the bounds 
-  // if (keaddr==NULL) 
-  // { 
-  //   return false;
-  // }
+  if(end_pg == NULL || !end_pg->writable) return false;
 
   return true;
 }
@@ -203,7 +195,6 @@ syscall_handler (struct intr_frame *f UNUSED)
 {
   if (check_valid_uaddr(f->esp, sizeof(enum SYSCALL_NUMBER)) == NULL) 
   {
-    // PANIC("FUCK STACK SHIT\n");
     sys_exit(-1, f);
     return;
   }
@@ -395,11 +386,10 @@ sys_create (const char* file, unsigned initial_size,
   
   if(!check_string(file))
   {
-    // lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;
   }
-  // printf("sys_create\n");
+
   lock_acquire(&filesys_lock);
   bool check = false;
 
@@ -415,11 +405,10 @@ sys_open (const char *file, struct intr_frame *f)
   
   if(!check_string(file))
   {
-    // lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;
   }
-  // printf("sys_open\n");
+
   lock_acquire(&filesys_lock);
   struct thread* t = thread_current();
   struct process* p = get_process(t->tid);
@@ -448,11 +437,10 @@ sys_remove (const char *file, struct intr_frame *f)
 {
   if(!check_string(file))
   {
-    // lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;
   }
-  // printf("sys_remove\n");
+
   lock_acquire(&filesys_lock);
   bool success = filesys_remove(file);
   f->eax = success;
@@ -466,10 +454,9 @@ sys_filesize (int fd, struct intr_frame *f)
   if(fh == NULL)
   {
     f->eax = -1;
-    // lock_release(&filesys_lock);
     return;
   }
-  // printf("sys_filesize\n");
+
   lock_acquire(&filesys_lock);
   off_t size = file_length(fh->f);
 
@@ -481,28 +468,15 @@ sys_filesize (int fd, struct intr_frame *f)
 static void
 sys_read (int fd, void *buffer, unsigned size, 
         struct intr_frame *f)
-{
-  // frame_set_page_lock(buffer, ROUND_UP(size,PGSIZE)/PGSIZE, true);
-  
+{ 
   if (check_valid_uaddr(buffer,size) == NULL || !check_writable(buffer, size))
   {
-    // if (check_valid_uaddr(buffer,size) == NULL) PANIC("CHECK VALID\n");
-    // printf("A\n");
-    // frame_set_page_lock(buffer, ROUND_UP(size,PGSIZE)/PGSIZE, false); 
-    // lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;
   }
 
   frame_set_page_lock(buffer, size, true);
-  // printf("sys_read\n");
   lock_acquire(&filesys_lock);
-  // if (!check_writable(buffer, size))
-  // {
-  //   f->eax = -1;
-  //   lock_release(&filesys_lock);
-  //   return;
-  // }
 
   int sizeRead = 0;
   /* Read from console */
@@ -512,7 +486,6 @@ sys_read (int fd, void *buffer, unsigned size,
     struct file_handle* fh = find_file_handle(fd);
     if (fh == NULL || buffer == NULL)  {
       f->eax = -1;
-      // frame_set_page_lock(buffer, ROUND_UP(size,PGSIZE)/PGSIZE, false);
       lock_release(&filesys_lock);
       frame_set_page_lock(buffer, size, false);  
       return;
@@ -522,7 +495,6 @@ sys_read (int fd, void *buffer, unsigned size,
   }
 
   f->eax = sizeRead;
-  // frame_set_page_lock(buffer, ROUND_UP(size,PGSIZE)/PGSIZE, false); 
   lock_release(&filesys_lock);
   frame_set_page_lock(buffer, size, false); 
   return;
@@ -532,24 +504,15 @@ static void
 sys_write (int fd, const void *buffer, unsigned length, 
             struct intr_frame *f)
 {
-  // printf("sys_write\n");
-	/* Protect against race condition */
-  // lock_acquire(&filesys_lock);
-
   //load locked pages
 
   if (check_valid_uaddr(buffer,length) == NULL) 
   {
-        // frame_set_page_lock(buffer, ROUND_UP(length,PGSIZE)/PGSIZE, false); 
-    // lock_release(&frame_lock);
-    // lock_release(&filesys_lock);
     sys_exit(-1,f);
     return;   
   } 
 
-  // lock_acquire(&frame_lock);
   frame_set_page_lock(buffer, length, true);
-  // printf("sys_write\n");
   lock_acquire(&filesys_lock);
 
   /* Write to console */
@@ -557,8 +520,7 @@ sys_write (int fd, const void *buffer, unsigned length,
     f->eax = 0;
     lock_release(&filesys_lock);
     frame_set_page_lock(buffer, length, false); 
-    // lock_release(&frame_lock);
-    // printf("sys_write finish\n");
+
     return; 
   }
 
@@ -574,7 +536,6 @@ sys_write (int fd, const void *buffer, unsigned length,
       f->eax = 0;
       lock_release(&filesys_lock);
       frame_set_page_lock(buffer, length, false); 
-      // printf("sys_write finish\n");
       return; 
     }
     struct file* fi = fh->f;
@@ -584,7 +545,7 @@ sys_write (int fd, const void *buffer, unsigned length,
   f->eax = sizeWrite;
   lock_release(&filesys_lock);
   frame_set_page_lock(buffer, length, false); 
-  // printf("sys_write finish\n");
+
   return;
 }
 
@@ -592,19 +553,22 @@ static bool
 overlap_mapped_file(void* upage, int length)
 {
   struct thread* t = thread_current();
+  struct process* proc = get_process(t->tid);
   struct hash* spt = &t->supplementary_page_table;
   
   int size = (length + PGSIZE - 1) / PGSIZE;
   int i = 0;
   for (i = 0; i < size; i++) 
   {
-    //printf("i = %d\n", i);
     /* Check if overlap the stack */
-    
+    if (upage > PHYS_BASE - proc->num_stack_pages * PGSIZE)
+    {
+      return true;
+    } 
+
     /* Check if overlap mapped pages and executable map file */
     if (supplementary_page_table_lookup(spt, upage) != NULL) 
     {
-      //printf("remap into same place\n");
       return true;
     }
 
@@ -613,18 +577,13 @@ overlap_mapped_file(void* upage, int length)
   return false;
 }
 
-static void
-sys_mmap(int fd, void *upage, struct intr_frame *f)
+static bool
+valid_mmap_mapping(int fd, void* upage)
 {
-  // printf("sys_mmap\n");
-  lock_acquire(&filesys_lock);
   struct file_handle* fh = find_file_handle(fd);
   if (fh == NULL) 
   {
-    f->eax = -1;
-    //printf("here1\n");
-    lock_release(&filesys_lock);
-    return;
+    return false;
   }
 
   struct file* fi = fh->f;
@@ -632,92 +591,44 @@ sys_mmap(int fd, void *upage, struct intr_frame *f)
   /* If file length is 0 return -1 */
   if (length == 0) 
   {
-    f->eax = -1;
-    //printf("here2\n");
-    lock_release(&filesys_lock);
-    return;
+    return false;
   }
   /* If upage is not page align */
   if ((int)upage % PGSIZE != 0 || (int)upage == 0 || fd == 0 || fd == 1) 
   {
-    f->eax = -1;
-    //printf("here3\n");
-    lock_release(&filesys_lock);
-    return;
+    return false;
   }
-  //printf("here\n");
-  //TODO check if upageess is valid 
+  
   /* If the range of pages mapped overlaps any existing
    * set of mapped pages, including the stack or pages mapped
    * at executable load time
    */
-   //printf("here\n");
    if (overlap_mapped_file(upage, length)) 
    {
-      f->eax = -1;
-      lock_release(&filesys_lock);
-      return;
-   }
-   //printf("there\n");
-   /* Increment mapid */
-
-   uint32_t read_bytes = length;
-   uint32_t zero_bytes = 0;
-   if (read_bytes % PGSIZE == 0) 
-   {
-      zero_bytes = 0;
-   } else 
-   {
-      zero_bytes = PGSIZE - (read_bytes % PGSIZE);
+      return false;
    }
 
-   int org_ofs = file_tell(fi);
-   struct thread* t = thread_current();
-   struct process* p = get_process(t->tid);
-   p->mapid++;
+   return true;
+}
 
-   struct hash* mpt = &t->mmap_page_table;
-   struct hash* spt = &t->supplementary_page_table;
-   /* Insert an entry into the hash table */
-   int array_size = (length + PGSIZE-1)/PGSIZE;
-   struct mmap_entry* mpt_entry = mmap_table_put(mpt, p->mapid, array_size,fi); 
-   if (mpt_entry == NULL)
-   {
-     f->eax = -1;
-	   return;
-   }
-   // struct mmap_entry* mpt_entry = mmap_table_lookup(mpt, p->mapid);
-   //if (mpt_entry == NULL) printf("NULL\n");
-   //mpt_entry->file = fi;
-   // mpt_entry->size = array_size;
-   /* Keep a extra copy of the file */
-   //mpt_entry->backup_file = malloc(sizeof(struct file));
-   //memcpy(mpt_entry->backup_file, fi, sizeof(struct file));
-   // mpt_entry->backup_file = file_reopen(fi);
+static void
+load_mmap_table(struct file* fi, struct hash* mpt, 
+  struct hash* spt, struct mmap_entry* mpt_entry, void* upage) 
+{
    int count = 0;
-
+   uint32_t read_bytes = file_length(fi);
+   uint32_t zero_bytes = (PGSIZE - (read_bytes % PGSIZE)) % PGSIZE;
    /* Load segment */
    while (read_bytes > 0 || zero_bytes > 0) 
    {
-      //printf("upage = %d\n", (int)upage);
-     //printf("Count = %d\n",count);
      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
      size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-     // uint8_t *kpage = frame_get_page (PAL_USER, upage);
-     // if (kpage == NULL)
-     // {
-     //    f->eax = -1;
-     //    //printf("kpage is NULL\n");
-     //    return;
-     // }
-     struct page* spt_entry = supplementary_page_table_put(spt, upage);
-     // struct page* spt_entry = supplementary_page_table_lookup(spt, upage);  
+     struct page* spt_entry = supplementary_page_table_put(spt, upage);  
      
      spt_entry->executable = false;
      spt_entry->writable = true;
      spt_entry->page_read_bytes = page_read_bytes;
-     // spt_entry->kpage = kpage;
      spt_entry->kpage = 0;
      spt_entry->vaddr = upage;
      spt_entry->ofs = file_tell(fi);
@@ -730,7 +641,42 @@ sys_mmap(int fd, void *upage, struct intr_frame *f)
      upage += PGSIZE;
      count++;
    }
-   
+}
+
+static void
+sys_mmap(int fd, void *upage, struct intr_frame *f)
+{
+  lock_acquire(&filesys_lock);
+
+  if (!valid_mmap_mapping(fd, upage)) 
+  {
+    f->eax = -1;
+    lock_release(&filesys_lock);
+    return;
+  }
+      
+   struct file_handle* fh = find_file_handle(fd);
+   struct file* fi = fh->f;
+   /* Save the original offset of the file */
+   int org_ofs = file_tell(fi);
+
+   struct thread* t = thread_current();
+   struct process* p = get_process(t->tid);
+
+   /* Increment mapid */
+   p->mapid++;
+
+   struct hash* mpt = &t->mmap_page_table;
+   struct hash* spt = &t->supplementary_page_table;
+   /* Insert an entry into the hash table */
+   int array_size = (file_length(fi) + PGSIZE-1)/PGSIZE;
+   struct mmap_entry* mpt_entry = mmap_table_put(mpt, p->mapid, array_size,fi); 
+   if (mpt_entry == NULL)
+   {
+     f->eax = -1;
+     return;
+   }
+   load_mmap_table(fi, mpt, spt, mpt_entry, upage);
    /* Return the mapid */
    f->eax = p->mapid;
    file_seek(fi,org_ofs);

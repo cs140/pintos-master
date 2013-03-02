@@ -15,6 +15,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -25,6 +26,7 @@ void setup_arguments(void **esp, char* filename, char* save_ptr);
 void cleanup_process(uint32_t status, struct intr_frame *f);
 
 #define MAX_CMD_LENGTH 128
+#define MAX_STACK_PAGE 2048
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -805,8 +807,14 @@ grow_stack(void* fault_addr, struct intr_frame* f,struct process* proc)
 {
   void* process_bottom = (void*)(PHYS_BASE - proc->num_stack_pages * PGSIZE);
   int distance = ROUND_UP((uint64_t)process_bottom - (uint64_t)fault_addr, PGSIZE);
-
+  
   int num_new_pages = distance / PGSIZE;
+  
+  /* Grow over total number of stack size */
+  if (proc->num_stack_pages + num_new_pages > MAX_STACK_PAGE)
+  {
+    PANIC("Stack size exceed maximum limit 8 MB\n");
+  }
 
   int i;
   for (i=0; i<num_new_pages; i++)
