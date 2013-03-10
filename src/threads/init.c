@@ -36,6 +36,7 @@
 #include "devices/ide.h"
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
+#include "filesys/buffercache.h"
 #endif
 
 /* Page directory with kernel mappings only. */
@@ -122,13 +123,14 @@ main (void)
 
 #ifdef FILESYS
   /* Initialize file system. */
+  bcache_init();
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
 
   printf ("Boot complete.\n");
-  
+
   /* Run actions specified on kernel command line. */
   run_actions (argv);
 
@@ -339,6 +341,7 @@ run_actions (char **argv)
 
       /* Invoke action and advance. */
       a->function (argv);
+
       argv += a->argc;
     }
   

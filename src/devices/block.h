@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <inttypes.h>
 
+
 /* Size of a block device sector in bytes.
    All IDE disks use this sector size, as do most USB and SCSI
    disks.  It's not worth it to try to cater to other sector
@@ -52,6 +53,8 @@ struct block *block_next (struct block *);
 /* Block device operations. */
 block_sector_t block_size (struct block *);
 void block_read (struct block *, block_sector_t, void *);
+void block_filesys_write (block_sector_t sector, void* buffer);
+void block_filesys_read(block_sector_t sector, void* buffer);
 void block_write (struct block *, block_sector_t, const void *);
 const char *block_name (struct block *);
 enum block_type block_type (struct block *);

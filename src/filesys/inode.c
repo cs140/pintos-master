@@ -10,6 +10,12 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
+#define NUM_BLOCK_POINTER 128
+#define NUM_BLOCK 125
+#define NUM_DIRECT_BLOCK 117
+#define NUM_INDIRECT_BLOCK 7
+
+
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
@@ -17,7 +23,7 @@ struct inode_disk
     block_sector_t start;               /* First data sector. */
     off_t length;                       /* File size in bytes. */
     unsigned magic;                     /* Magic number. */
-    uint32_t unused[125];               /* Not used. */
+    uint32_t block[125];               /* Not used. */
   };
 
 /* Returns the number of sectors to allocate for an inode SIZE
@@ -48,9 +54,47 @@ byte_to_sector (const struct inode *inode, off_t pos)
 {
   ASSERT (inode != NULL);
   if (pos < inode->data.length)
-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+    //return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+    return translate_sector(inode, pos);
   else
     return -1;
+}
+
+static block_sector_t
+translate_sector (const struct inode* inode, off_t pos)
+{
+  int sector_num = pos / BLOCK_SECTOR_SIZE;
+  /* Direct block */
+  if (sector_num < NUM_DIRECT_BLOCK)
+  {
+    return inode->data.block[sector_num];
+  }
+  /* Indirect/Doubly indirect block */ 
+  else 
+  {
+    int indirect_block_num = (sector_num - NUM_DIRECT_BLOCK) / NUM_BLOCK_POINTER;
+    /* Indirect block */
+    if (indirect_block_num < NUM_INDIRECT_BLOCK) 
+    {
+      uint32_t indirect_block_sector = inode->data.block[indirect_block_num];
+      uint32_t* blocks = malloc(BLOCK_SECTOR_SIZE);
+      block_read(fs_device, indirect_block_sector, blocks); 
+      return blocks[sector_num % NUM_BLOCK_POINTER];
+    }
+    /* Doubly indirect block */ 
+    else 
+    {
+      /* Get the appropriate direct block sector number from the doubly indirect block */
+      uint32_t doubly_block_sector = inode->data.block[124];
+      uint32_t* blocks = malloc(BLOCK_SECTOR_SIZE);
+      block_read(fs_device, doubly_block_sector, blocks);
+
+      /* Get the sector number of the block */
+      uint32_t indirect_block_sector = blocks[indirect_block_sector - NUM_INDIRECT_BLOCK];
+      block_read(fs_device, indirect_block_sector, blocks);
+      return blocks[sector_num % NUM_BLOCK_POINTER];
+    }
+  }
 }
 
 /* List of open inodes, so that opening a single inode twice
@@ -87,19 +131,28 @@ inode_create (block_sector_t sector, off_t length)
       size_t sectors = bytes_to_sectors (length);
       disk_inode->length = length;
       disk_inode->magic = INODE_MAGIC;
-      if (free_map_allocate (sectors, &disk_inode->start)) 
-        {
-          block_write (fs_device, sector, disk_inode);
-          if (sectors > 0) 
-            {
-              static char zeros[BLOCK_SECTOR_SIZE];
-              size_t i;
+
+      /* Write the inode to disk and doesn't pre-allocate any data block */
+      block_write(fs_device, sector, disk_inode);
+      success = true;      
+
+      // if (free_map_allocate (sectors, &disk_inode->start)) 
+      //   {
+      //     block_write (fs_device, sector, disk_inode);
+      //     if (sectors > 0) 
+      //       {
+      //         static char zeros[BLOCK_SECTOR_SIZE];
+      //         size_t i;
               
-              for (i = 0; i < sectors; i++) 
-                block_write (fs_device, disk_inode->start + i, zeros);
-            }
-          success = true; 
-        } 
+      //         for (i = 0; i < sectors; i++) 
+      //         {
+      //           // printf("%d\n", i)
+      //           block_write (fs_device, disk_inode->start + i, zeros);
+      //         }
+                
+      //       }
+      //     success = true; 
+      //   } 
       free (disk_inode);
     }
   return success;
@@ -177,12 +230,22 @@ inode_close (struct inode *inode)
       if (inode->removed) 
         {
           free_map_release (inode->sector, 1);
-          free_map_release (inode->data.start,
-                            bytes_to_sectors (inode->data.length)); 
+
+          /* Traverse the list of block sector to free each one at a time */
+          free_inode_data(inode);
+
+          //free_map_release (inode->data.start,
+                            //bytes_to_sectors (inode->data.length)); 
         }
 
       free (inode); 
     }
+}
+
+void
+free_inode_data (struct inode* inode)
+{
+  
 }
 
 /* Marks INODE to be deleted when it is closed by the last caller who

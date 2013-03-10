@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include "devices/ide.h"
 #include "threads/malloc.h"
+#include "filesys/buffercache.h"
+#include "filesys/filesys.h"
+#include "threads/thread.h"
 
 /* A block device. */
 struct block
@@ -120,9 +123,61 @@ check_sector (struct block *block, block_sector_t sector)
 void
 block_read (struct block *block, block_sector_t sector, void *buffer)
 {
+  
   check_sector (block, sector);
+
+  struct bcache_entry* entry;
+  if (block_type(block) == BLOCK_FILESYS)
+  {
+    // printf("reading:%d\n", sector);
+    lock_acquire(&filesys_cache.lock);
+    entry = bcache_lookup(&filesys_cache, sector);
+
+    if (entry != NULL) //entry already exists
+    {
+      memcpy(buffer, entry->data, BLOCK_SECTOR_SIZE); //copy existing data->buf
+      lock_release(&filesys_cache.lock);
+      return;
+    } 
+    else //no entry, need to create entry
+    {
+      entry = bcache_add(&filesys_cache,sector);
+      if (entry == NULL) PANIC("COULD NOT ADD TO BCACHE\n");
+    }
+    lock_release(&filesys_cache.lock);
+  }
+  
   block->ops->read (block->aux, sector, buffer);
   block->read_cnt++;
+
+  if (block_type(block) == BLOCK_FILESYS)
+  {
+    bcache_write(entry,buffer); //unlocks locked flag
+    bcache_read_ahead(block,sector + 1);
+
+    return;
+  }
+}
+
+void 
+block_filesys_read(block_sector_t sector, void* buffer)
+{
+  struct block* block = fs_device;
+  check_sector(block,sector);
+  ASSERT(block->type == BLOCK_FILESYS);
+
+  block->ops->read(block->aux,sector,buffer);
+  block->read_cnt++;
+}
+
+void
+block_filesys_write (block_sector_t sector, void* buffer)
+{
+  struct block* block = fs_device;
+  check_sector (block, sector);
+  ASSERT (block->type == BLOCK_FILESYS);
+  block->ops->write (block->aux, sector, buffer);
+  block->write_cnt++;
 }
 
 /* Write sector SECTOR to BLOCK from BUFFER, which must contain
@@ -135,6 +190,41 @@ block_write (struct block *block, block_sector_t sector, const void *buffer)
 {
   check_sector (block, sector);
   ASSERT (block->type != BLOCK_FOREIGN);
+
+  if (block_type(block) == BLOCK_FILESYS)
+  {
+    // printf("writing:%d\n", sector);
+    // printf("tid:%d\n", thread_current()->tid);
+    lock_acquire(&filesys_cache.lock);
+    struct bcache_entry* entry = bcache_lookup(&filesys_cache, sector);
+    if(entry == NULL) //read into cache
+    {
+      entry = bcache_add(&filesys_cache, sector);
+      if (entry == NULL) PANIC("COULD NOT ADD TO BCACHE\n");
+      // lock_release(&filesys_cache.lock);
+
+      // char buf[BLOCK_SECTOR_SIZE];
+      // block->ops->read (block->aux, sector, buf);
+      // block->read_cnt++;
+
+      // bcache_write(entry,buf);
+
+      // lock_acquire(&filesys_cache.lock);
+    }
+
+    entry->dirty = true;
+    memcpy(entry->data,buffer,BLOCK_SECTOR_SIZE);
+    entry->locked = false;
+    cond_broadcast(&filesys_cache.cond, &filesys_cache.lock);
+    // bcache_set_dirty(entry,true);
+     // if(entry == NULL) PANIC("LAKJGLAKGJ\n");
+    // bcache_write(entry,buffer);
+    // memcpy(entry->data, buffer, BLOCK_SECTOR_SIZE);\
+    // printf("tid:%d\n", thread_current()->tid);
+    lock_release(&filesys_cache.lock);
+    return;  
+  } 
+
   block->ops->write (block->aux, sector, buffer);
   block->write_cnt++;
 }

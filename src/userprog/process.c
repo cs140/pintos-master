@@ -796,9 +796,10 @@ void cleanup_process (uint32_t status, struct intr_frame *f)
   free_filehandles();
   lock_release(&filesys_lock);
 
+  lock_acquire(&parent->wait_lock);
   if(parent != NULL && !parent->exited) 
   {
-    lock_acquire(&parent->wait_lock);
+    // lock_acquire(&parent->wait_lock);
 
     null_children(cur_process);
 
@@ -814,6 +815,7 @@ void cleanup_process (uint32_t status, struct intr_frame *f)
     lock_release(&parent->wait_lock);
   } else 
   {
+    lock_release(&parent->wait_lock);
     remove_process(parent->tid, cur_process->tid);
   }
   
